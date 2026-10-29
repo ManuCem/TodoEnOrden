@@ -1,54 +1,58 @@
 # TodoenOrden
 
-A small mobile-first web app for people who share a flat. It keeps the everyday logistics of a shared home in one place: who lives there, what needs buying, who cleans what this week, and which bills are coming up.
+Una pequeña aplicación web, pensada para el móvil, para quienes comparten piso. Reúne en un solo lugar la logística del día a día: quién vive en casa, qué hay que comprar, a quién le toca limpiar esta semana y qué facturas están por vencer.
 
-The interface is in Spanish. The whole app is a single file, [`todoenorden_v2.html`](todoenorden_v2.html), with no build step.
+Toda la aplicación es un único archivo, [`todoenorden_v2.html`](todoenorden_v2.html), sin necesidad de compilar nada.
 
-## Features
+## Acceso a la aplicación
 
-The app has four sections, reachable from the bottom navigation bar.
+Entra aquí: <https://github.com/ManuCem/TodoEnOrden/pull/new/add-readme>
 
-| Section | What it does |
+## Funcionalidades
+
+La aplicación tiene cuatro secciones, accesibles desde la barra de navegación inferior.
+
+| Sección | Qué hace |
 | --- | --- |
-| **Piso** (Flat) | Shows the flat's 6-letter invite code (displayed as fridge-magnet letters) with a copy button, lists the flatmates, lets you change your name, and lets you leave the flat. |
-| **Compra** (Shopping) | A shared shopping list. Add products, tick them off as bought, or remove them. Duplicate names are rejected. |
-| **Limpieza** (Cleaning) | Define cleaning zones (bathroom, kitchen, living room...). Each week the zones rotate to the next flatmate. You can only tick off your own tasks, and a progress bar shows how many are done, coloured by who cleaned them. |
-| **Facturas** (Bills) | Register recurring bills (name, amount, frequency, next due date, who advances the money). Bills are sorted by due date and flagged as due soon, due today, or overdue. Frequencies: weekly, monthly, bimonthly, quarterly, yearly. |
+| **Piso** | Muestra el código de invitación del piso (6 letras, con aspecto de letras magnéticas de nevera) con un botón para copiarlo, la lista de compañeros, la opción de cambiar tu nombre y la opción de salir del piso. |
+| **Compra** | Lista de la compra compartida. Puedes añadir productos, marcarlos como comprados o quitarlos. No se permiten nombres duplicados. |
+| **Limpieza** | Define las zonas de limpieza (baño, cocina, salón...). Cada semana las zonas pasan al siguiente compañero. Solo puedes marcar como hechas tus propias tareas, y una barra de progreso muestra cuántas se han completado, con el color de quien las limpió. |
+| **Facturas** | Da de alta facturas periódicas (nombre, importe, frecuencia, próximo vencimiento y quién adelanta el dinero). Se ordenan por fecha de vencimiento y se marcan como «vence hoy», «en unos días» o «vencida». Frecuencias: semanal, mensual, bimestral, trimestral y anual. |
 
-### Onboarding
+### Primeros pasos
 
-On first use you enter your name and then either:
+La primera vez escribes tu nombre y después puedes elegir entre:
 
-- **create a flat**, which gives you a 6-character invite code to share, or
-- **join a flat** by typing the code a flatmate gave you.
+- **Crear un piso**, que te da un código de 6 caracteres para compartir con tus compañeros.
+- **Unirte a un piso** escribiendo el código que te haya dado un compañero.
 
-Each flatmate gets their own "magnet" colour (six colours, assigned by the order they joined the flat). The app supports light and dark mode automatically.
+Cada compañero recibe su propio color de «imán» (seis colores, asignados según el orden en que entró al piso). La aplicación se adapta automáticamente al modo claro y al modo oscuro.
 
-## How it works
+## Cómo funciona
 
-- **Frontend:** plain HTML, CSS and vanilla JavaScript in one file. The Archivo font is loaded from Google Fonts.
-- **Backend:** [Supabase](https://supabase.com) (Postgres + Auth), loaded from a CDN through `@supabase/supabase-js`.
-- **Authentication:** anonymous sign-in. There is no email or password; each browser gets its own anonymous user. Because of this, clearing your browser data means losing access to your user, and you would need to rejoin the flat with the invite code.
-- **Data used:** the tables `profiles`, `apartments`, `apartment_members`, `shopping_items`, `cleaning_zones`, `cleaning_assignments` and `recurring_bills`, plus the database functions `create_apartment`, `join_apartment` and `ensure_week_assignments`. Access is protected with Postgres row-level security.
+- **Interfaz:** HTML, CSS y JavaScript puro en un solo archivo. La tipografía Archivo se carga desde Google Fonts.
+- **Base de datos:** [Supabase](https://supabase.com) (Postgres y autenticación), cargado desde un CDN mediante `@supabase/supabase-js`.
+- **Autenticación:** inicio de sesión anónimo. No hay correo ni contraseña: cada navegador recibe su propio usuario anónimo. Por eso, si borras los datos del navegador, pierdes el acceso a ese usuario y tendrás que volver a unirte al piso con el código de invitación.
+- **Datos que utiliza:** las tablas `profiles`, `apartments`, `apartment_members`, `shopping_items`, `cleaning_zones`, `cleaning_assignments` y `recurring_bills`, y las funciones de base de datos `create_apartment`, `join_apartment` y `ensure_week_assignments`. El acceso está protegido con seguridad a nivel de fila (row-level security) de Postgres.
 
-## Running it
+## Cómo ejecutarla
 
-1. Clone the repository and open `todoenorden_v2.html` in a browser (double-click it, or serve the folder with any static server).
-2. The app connects to the Supabase project configured at the top of the script (`SUPABASE_URL` and `SUPABASE_KEY`). That key is a publishable (public) key, which is meant to be used in the browser; the data is protected by row-level security.
-3. In the Supabase dashboard, **Allow anonymous sign-ins** must be enabled under **Authentication → Sign In / Providers**. If it is not, the app shows a connection error with these exact steps.
+1. Clona el repositorio y abre `todoenorden_v2.html` en un navegador (con doble clic, o sirviendo la carpeta con cualquier servidor estático).
+2. La aplicación se conecta al proyecto de Supabase configurado al principio del script (`SUPABASE_URL` y `SUPABASE_KEY`). Esa clave es una clave publicable (pública), pensada para usarse en el navegador; los datos están protegidos por la seguridad a nivel de fila.
+3. En el panel de Supabase hay que activar **Allow anonymous sign-ins** en **Authentication → Sign In / Providers**. Si no está activado, la aplicación muestra un error de conexión con estos mismos pasos.
 
-### Demo mode
+### Modo de ejemplo
 
-To try the app without a database, add `?demo` to the URL, for example `todoenorden_v2.html?demo`. It loads in-memory example data (a flat with three flatmates, a shopping list, cleaning zones and three bills). Nothing is saved, and the header shows "Datos de ejemplo". You can also reach demo mode from the connection error screen.
+Para probar la aplicación sin base de datos, añade `?demo` a la dirección, por ejemplo `todoenorden_v2.html?demo`. Carga datos de ejemplo en memoria (un piso con tres compañeros, una lista de la compra, zonas de limpieza y tres facturas). No se guarda nada y la cabecera muestra «Datos de ejemplo». También puedes entrar al modo de ejemplo desde la pantalla de error de conexión.
 
-## Using your own Supabase project
+## Usar tu propio proyecto de Supabase
 
-To run your own copy instead of the existing backend:
+Para ejecutar tu propia copia en lugar del servidor actual:
 
-1. Create a Supabase project and enable anonymous sign-ins.
-2. Create the tables and functions listed above, with row-level security policies that limit each table to the members of the same flat.
-3. Replace `SUPABASE_URL` and `SUPABASE_KEY` at the top of the script with your project's URL and publishable key.
+1. Crea un proyecto en Supabase y activa el inicio de sesión anónimo.
+2. Crea las tablas y funciones indicadas arriba, con políticas de seguridad a nivel de fila que limiten cada tabla a los miembros del mismo piso.
+3. Sustituye `SUPABASE_URL` y `SUPABASE_KEY` al principio del script por la URL y la clave publicable de tu proyecto.
 
-## Contributing
+## Colaboración
 
-Anyone who needs to edit the project must be added as a collaborator under **Settings → Collaborators** on GitHub. Changes are best proposed on a branch through a pull request.
+Quien necesite editar el proyecto debe añadirse como colaborador en **Settings → Collaborators** de GitHub. Lo mejor es proponer los cambios en una rama mediante una pull request.
