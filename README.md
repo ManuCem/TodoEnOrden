@@ -12,10 +12,12 @@ TodoenOrden centraliza la organización doméstica de las personas que comparten
 
 | Módulo | Descripción |
 | --- | --- |
-| **Piso** | Creación de un piso o incorporación mediante un código de invitación de 6 caracteres. Listado de compañeros, edición del nombre propio y salida del piso. |
-| **Compra** | Lista de la compra compartida: alta de productos, marcado como comprados y eliminación. No admite nombres duplicados. |
-| **Limpieza** | Definición de zonas de limpieza con rotación semanal automática entre los compañeros. Cada usuario solo puede marcar como completadas sus propias tareas. |
-| **Facturas** | Alta de facturas periódicas (importe, frecuencia, vencimiento y persona que adelanta el pago), ordenadas por fecha de vencimiento con indicación de estado. |
+| **Alta inicial** | Pantalla de bienvenida: el usuario indica su nombre y crea un piso (recibe un código de 6 caracteres) o se une a uno existente con ese código. |
+| **Piso** | Muestra el código de invitación (con botón para copiarlo) y el listado de compañeros, con un color por persona. Permite cambiar el nombre propio y salir del piso. Antes de salir, la aplicación consulta el saldo del usuario y avisa de si tiene deudas pendientes, si le deben dinero o si sus cuentas están saldadas. |
+| **Compra** | Lista de la compra compartida: alta, edición del nombre, marcado como comprado/pendiente y eliminación de productos, con contador de pendientes. No admite nombres duplicados. |
+| **Limpieza** | Definición de zonas de limpieza (sin duplicados) y asignación semanal automática: cada semana (de lunes a domingo) las zonas rotan al siguiente compañero. Muestra el progreso de la semana y la fecha de realización. Cada usuario solo puede marcar como hechas sus propias tareas. |
+| **Facturas** | Alta de facturas periódicas con nombre, importe, frecuencia (semanal, mensual, bimestral, trimestral o anual), fecha de vencimiento y persona que adelanta el pago. Validación de campos con mensajes de error. Se listan ordenadas por vencimiento, con indicación de estado (vencida, vence hoy, mañana, en N días); las pausadas no se muestran. |
+| **Avisos** | Si alguna factura vence en menos de 3 días (o ya ha vencido), aparece un aviso en la cabecera de las demás pestañas que lleva directamente a Facturas. |
 
 ## 3. Arquitectura y tecnologías
 
@@ -23,7 +25,10 @@ TodoenOrden centraliza la organización doméstica de las personas que comparten
 - **Backend:** [Supabase](https://supabase.com) (PostgreSQL y servicio de autenticación), accedido mediante `@supabase/supabase-js`.
 - **Autenticación:** inicio de sesión anónimo; no se almacenan correos ni contraseñas.
 - **Seguridad de los datos:** políticas de seguridad a nivel de fila (*row-level security*) de PostgreSQL.
-- **Modelo de datos:** tablas `profiles`, `apartments`, `apartment_members`, `shopping_items`, `cleaning_zones`, `cleaning_assignments` y `recurring_bills`, y funciones `create_apartment`, `join_apartment` y `ensure_week_assignments`.
+- **Sesión:** se conserva en el almacenamiento del navegador, con alternativa en memoria si este no está disponible.
+- **Modelo de datos:** tablas `profiles`, `apartments`, `apartment_members`, `shopping_items`, `cleaning_zones`, `cleaning_assignments` y `recurring_bills`; vista `apartment_balances` (saldo por usuario); y funciones `create_apartment`, `join_apartment` y `ensure_week_assignments`.
+- **Capa de datos:** la interfaz accede a los datos a través de una API interna con dos implementaciones intercambiables: Supabase y una versión en memoria para el modo demostración.
+- **Gestión de errores:** si no hay conexión, la aplicación muestra una pantalla con instrucciones (por ejemplo, activar el acceso anónimo) y opciones de reintentar o abrir los datos de ejemplo.
 - **Despliegue:** GitHub Pages.
 
 ## 4. Ejecución
@@ -39,5 +44,4 @@ TodoenOrden centraliza la organización doméstica de las personas que comparten
 | Archivo | Contenido |
 | --- | --- |
 | `index.html` | Aplicación completa (interfaz y lógica). |
-| `todoenorden_v2.html` | Versión anterior, conservada como histórico. |
 | `README.md` | Documentación del proyecto. |
