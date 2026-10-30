@@ -2,7 +2,7 @@
 
 Aplicación web para la gestión colaborativa de pisos compartidos. Proyecto universitario.
 
-**Acceso a la aplicación:** <https://manucem.github.io/TodoEnOrden/>
+**Acceso a la aplicación:** <https://manucem.github.io/TodoEnOrden/index.html>
 
 ## 1. Descripción
 
