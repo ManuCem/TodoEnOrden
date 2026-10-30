@@ -28,7 +28,7 @@ TodoenOrden centraliza la organización doméstica de las personas que comparten
 
 ## 4. Ejecución
 
-**En línea:** accede a la [aplicación desplegada](https://manucem.github.io/TodoEnOrden/todoenorden_v2.html).
+**En línea:** accede a la [aplicación desplegada](https://manucem.github.io/TodoEnOrden/index.html).
 
 **En local:** clona el repositorio y abre `todoenorden_v2.html` en un navegador. Requiere conexión a internet y que el inicio de sesión anónimo esté activado en el proyecto de Supabase (*Authentication → Sign In / Providers → Allow anonymous sign-ins*).
 
