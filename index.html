@@ -176,6 +176,11 @@ input.invalid,select.invalid{border-color:var(--bad)}
 .due.soon{background:var(--m2);color:var(--m2t);padding:2px 9px;border-radius:99px}
 .due.late{color:var(--bad)}
 .right{display:grid;justify-items:end;gap:5px}
+.day{display:flex;align-items:center;gap:10px;margin:16px 0 2px;font-size:12px;font-weight:900;
+  letter-spacing:.08em;text-transform:uppercase;color:var(--accent)}
+.day::after{content:"";flex:1;height:1.5px;background:var(--accent-soft)}
+.day:first-child{margin-top:6px}
+.day .n{font-weight:800;color:var(--muted);letter-spacing:0}
 .empty{padding:18px 0;color:var(--muted);font-size:15px;display:block!important;min-height:0!important;text-align:center}
 
 /* tramos de la semana */
@@ -266,7 +271,7 @@ function remoteApi(sb, uid){
       const r = ok(await sb.from('apartment_balances').select('balance').eq('apartment_id', aptId).eq('user_id', uid).maybeSingle());
       return Number(r?.balance ?? 0);
     },
-    async items(aptId){ return ok(await sb.from('shopping_items').select('id,name,is_bought,created_at').eq('apartment_id', aptId).order('is_bought').order('created_at')); },
+    async items(aptId){ return ok(await sb.from('shopping_items').select('id,name,is_bought,created_at').eq('apartment_id', aptId).order('is_bought').order('created_at',{ascending:false})); },
     async addItem(aptId,name){ ok(await sb.from('shopping_items').insert({apartment_id:aptId,name})); },
     async setBought(id,v){ ok(await sb.from('shopping_items').update({is_bought:v}).eq('id', id)); },
     async delItem(id){ ok(await sb.from('shopping_items').delete().eq('id', id)); },
@@ -296,20 +301,26 @@ function remoteApi(sb, uid){
 const PISOS = {
   lavapies: { nombre:'Piso de Lavapiés', code:'K7P2QX',
     miembros:['Marta','Leo','Sara'],
-    zonas:['Baño','Cocina','Salón','Terraza'],
-    compra:[['Leche',0],['Papel higiénico',0],['Café',0],['Detergente',0],['Pan',1],['Huevos',1]],
-    facturas:[['Luz',72.4,'monthly',2,0,0],['Comunidad',45,'quarterly',6,0,0],['Seguro del hogar',19.9,'monthly',1,0,1],
-              ['Internet',39.9,'monthly',16,1,0],['Agua',28.15,'quarterly',-2,2,0]], saldo:-12.5 },
+    zonas:['Baño','Cocina','Salón','Terraza','Pasillo','Basura y reciclaje'],
+    compra:[['Leche',0,0],['Café',0,0],['Plátanos',0,0],['Papel higiénico',0,1],['Detergente',0,1],
+            ['Bolsas de basura',0,2],['Aceite de oliva',0,3],['Arroz',0,3],['Tomate frito',0,5],
+            ['Pan',1,0],['Huevos',1,1],['Yogures',1,2]],
+    facturas:[['Luz',72.4,'monthly',2,0,0],['Comunidad',45,'quarterly',6,0,0],['Internet',39.9,'monthly',16,1,0],
+              ['Agua',28.15,'quarterly',-2,2,0],['Gas',51.3,'bimonthly',23,1,0],['Netflix',12.99,'monthly',9,2,0],
+              ['Seguro del hogar',19.9,'monthly',1,0,1]], saldo:-12.5 },
   cunef: { nombre:'Piso de CUNEF', code:'D5F011',
     miembros:['Ariadna','Manu','Gabi','Pablo'],
-    zonas:['Baño','Cocina','Pasillo'],
-    compra:[['Arroz',0],['Aceite de oliva',0],['Bolsas de basura',0],['Leche',1]],
-    facturas:[['Luz',96.3,'monthly',0,1,0],['Internet',42,'monthly',11,0,0],['Gas',54.8,'bimonthly',24,2,0],['Agua',31.2,'quarterly',38,3,0]], saldo:26.4 },
+    zonas:['Baño','Cocina','Pasillo','Salón','Escalera'],
+    compra:[['Arroz',0,0],['Aceite de oliva',0,0],['Bolsas de basura',0,1],['Café',0,1],['Fregasuelos',0,2],
+            ['Pasta',0,2],['Atún en lata',0,4],['Leche',1,0],['Cereales',1,1]],
+    facturas:[['Luz',96.3,'monthly',0,1,0],['Internet',42,'monthly',11,0,0],['Gas',54.8,'bimonthly',24,2,0],
+              ['Agua',31.2,'quarterly',38,3,0],['Comunidad',38,'monthly',5,0,0],['Spotify',17.99,'monthly',14,1,0]], saldo:26.4 },
   chamberi: { nombre:'Piso de Chamberí', code:'T3X9ZK',
     miembros:['Clara','Diego'],
-    zonas:['Baño','Cocina'],
-    compra:[['Fruta',0],['Pasta',1]],
-    facturas:[['Alquiler del garaje',60,'monthly',4,0,0],['Luz',48.7,'monthly',19,1,0]], saldo:0 }
+    zonas:['Baño','Cocina','Salón'],
+    compra:[['Fruta',0,0],['Leche',0,0],['Papel de cocina',0,2],['Café',0,4],['Pasta',1,1]],
+    facturas:[['Alquiler del garaje',60,'monthly',4,0,0],['Luz',48.7,'monthly',19,1,0],
+              ['Internet',35,'monthly',8,0,0],['Agua',22.4,'quarterly',27,1,0]], saldo:0 }
 };
 let pisoDemo = 'lavapies';
 
@@ -322,7 +333,7 @@ function demoApi(clave){
     myName: P.miembros[0],
     apt: { id:'apt-'+pisoDemo, name:P.nombre, invite_code:P.code },
     members: P.miembros.map((n,i) => ({ id:uid(i), name:n })),
-    items: P.compra.map(([name,b],i) => ({ id:'i'+i, name, is_bought:!!b })),
+    items: P.compra.map(([name,b,dias],i) => ({ id:'i'+i, name, is_bought:!!b, created_at:new Date(Date.now()-(dias||0)*864e5 - i*36e5).toISOString() })),
     zones: P.zonas.map((name,i) => ({ id:'z'+i, name })),
     done: {},
     bills: P.facturas.map(([name,amount,frequency,dias,quien,pausada],i) => ({
@@ -344,8 +355,8 @@ function demoApi(clave){
     joinApartment:c=>{ const ok = Object.values(PISOS).some(p => p.code === c.toUpperCase()) || c.toUpperCase()===(db.apt?.invite_code||''); return ok ? wait() : Promise.reject(new Error('Código de piso no válido')); },
     members:()=>wait(db.members.slice()), leave:()=>{ db.apt=null; return wait(); },
     myBalance:()=>wait(P.saldo),
-    items:()=>wait(db.items.slice().sort((a,b)=>a.is_bought-b.is_bought)),
-    addItem:(a,name)=>{ if (db.items.some(i=>i.name.toLowerCase()===name.toLowerCase())) return Promise.reject({code:'23505',message:'dup'}); db.items.push({id:id('i'),name,is_bought:false}); return wait(); },
+    items:()=>wait(db.items.slice().sort((a,b)=>a.is_bought-b.is_bought || b.created_at.localeCompare(a.created_at))),
+    addItem:(a,name)=>{ if (db.items.some(i=>i.name.toLowerCase()===name.toLowerCase())) return Promise.reject({code:'23505',message:'dup'}); db.items.push({id:id('i'),name,is_bought:false,created_at:new Date().toISOString()}); return wait(); },
     setBought:(i,v)=>{ db.items.find(x=>x.id===i).is_bought=v; return wait(); },
     delItem:i=>{ db.items=db.items.filter(x=>x.id!==i); return wait(); },
     renameItem:(i,name)=>{ if (db.items.some(x=>x.id!==i && x.name.toLowerCase()===name.toLowerCase())) return Promise.reject({code:'23505',message:'dup'}); db.items.find(x=>x.id===i).name=name; return wait(); },
@@ -601,28 +612,47 @@ function renderPiso(){
   };
 }
 
-/* Compra común (TEO-11) */
+/* Compra común, agrupada por el día en que se añadió (TEO-11) */
+function filaCompra(i){
+  if (S.editItem === i.id) return `
+    <li><form class="row grow" data-edit="${i.id}">
+      <input id="editName" maxlength="80" value="${esc(i.name)}" aria-label="Nuevo nombre de ${esc(i.name)}" required>
+      <button class="btn small" type="submit">Guardar</button>
+      <button class="btn ghost small" type="button" id="cancelEdit">Cancelar</button></form></li>`;
+  return `
+    <li><button class="check" aria-pressed="${i.is_bought}" data-b="${i.id}" aria-label="${i.is_bought?'Marcar como pendiente':'Marcar como comprado'}: ${esc(i.name)}">${CHECK}</button>
+      <span class="grow name ${i.is_bought?'done':''}">${esc(i.name)}</span>
+      <button class="x" data-e="${i.id}" aria-label="Editar ${esc(i.name)}">${PENCIL}</button>
+      <button class="x" data-d="${i.id}" aria-label="Quitar ${esc(i.name)}">${CROSS}</button></li>`;
+}
 async function renderCompra(){
   const items = await S.api.items(S.apt.id);
-  const pending = items.filter(i => !i.is_bought).length;
+  const pend = items.filter(i => !i.is_bought);
+  const comprados = items.filter(i => i.is_bought);
+
+  // agrupar los pendientes por día, del más reciente al más antiguo
+  const dias = [];
+  for (const i of pend){
+    const et = dayLabel(i.created_at);
+    const g = dias.find(x => x.et === et);
+    if (g) g.items.push(i); else dias.push({ et, items:[i] });
+  }
+  const bloque = (et, lista) => `<div class="day">${esc(et)} <span class="n">${lista.length}</span></div>
+    <ul class="list">${lista.map(filaCompra).join('')}</ul>`;
+
   app.innerHTML = `${header('Compra común')}
-    <form class="row" id="fItem">
-      <input id="itemName" maxlength="80" placeholder="Añadir producto: leche, pan…" aria-label="Producto" required>
-      <button class="btn" type="submit">Añadir</button>
-    </form>
-    <section class="sec" style="margin-top:22px">
-      <div class="sec-head"><h2>Lista de la compra</h2><span class="count">${pending} por comprar</span></div>
-      <ul class="list">${items.length ? items.map(i => S.editItem === i.id ? `
-        <li><form class="row grow" data-edit="${i.id}">
-          <input id="editName" maxlength="80" value="${esc(i.name)}" aria-label="Nuevo nombre de ${esc(i.name)}" required>
-          <button class="btn small" type="submit">Guardar</button>
-          <button class="btn ghost small" type="button" id="cancelEdit">Cancelar</button></form></li>` : `
-        <li><button class="check" aria-pressed="${i.is_bought}" data-b="${i.id}" aria-label="${i.is_bought?'Marcar como pendiente':'Marcar como comprado'}: ${esc(i.name)}">${CHECK}</button>
-          <span class="grow name ${i.is_bought?'done':''}">${esc(i.name)}</span>
-          <button class="x" data-e="${i.id}" aria-label="Editar ${esc(i.name)}">${PENCIL}</button>
-          <button class="x" data-d="${i.id}" aria-label="Quitar ${esc(i.name)}">${CROSS}</button></li>`).join('')
-        : '<li class="empty">Aún no hay nada en la lista. Añade lo primero que falte en casa.</li>'}</ul>
+    <section class="sec">
+      <div class="sec-head"><h2>Lista de la compra</h2><span class="count">${pend.length} por comprar</span></div>
+      <p class="sub">Lo que falta en casa, agrupado por el día en que se apuntó.</p>
+      <form class="row" id="fItem" style="margin-bottom:4px">
+        <input id="itemName" maxlength="80" placeholder="Añadir producto: leche, pan…" aria-label="Producto" required>
+        <button class="btn" type="submit">Añadir</button>
+      </form>
+      ${pend.length ? dias.map(d => bloque(d.et, d.items)).join('')
+        : '<p class="empty">Nada pendiente. La nevera está a salvo.</p>'}
+      ${comprados.length ? bloque('Ya comprado', comprados) : ''}
     </section>`;
+
   $('#fItem').onsubmit = e => run(e, async () => { await S.api.addItem(S.apt.id, $('#itemName').value.trim()); await renderCompra(); });
   app.querySelectorAll('[data-b]').forEach(b => b.onclick = async () => {
     try{ await S.api.setBought(b.dataset.b, b.getAttribute('aria-pressed') !== 'true'); await renderCompra(); }catch(err){ toast(friendly(err)); }
@@ -710,6 +740,16 @@ function renderAyuda(){
 }
 
 /* Facturas periódicas: alta, reparto entre compañeros y pago de tu parte (TEO-34, TEO-31) */
+function dayLabel(when){
+  if (!when) return 'Sin fecha';
+  const d = new Date(when); if (isNaN(d)) return 'Sin fecha';
+  const hoy = new Date(); const dia = x => new Date(x.getFullYear(), x.getMonth(), x.getDate());
+  const dif = Math.round((dia(hoy) - dia(d)) / 864e5);
+  if (dif <= 0) return 'Hoy';
+  if (dif === 1) return 'Ayer';
+  if (dif < 7) return d.toLocaleDateString('es-ES',{weekday:'long'});
+  return d.toLocaleDateString('es-ES',{weekday:'short',day:'numeric',month:'short'});
+}
 const REPITE = {weekly:'cada semana',monthly:'cada mes',bimonthly:'cada 2 meses',quarterly:'cada 3 meses',yearly:'cada año'};
 async function renderFacturas(){
   const [bills, pagos] = await Promise.all([S.api.bills(S.apt.id), S.api.billPayments(S.apt.id).catch(()=>[])]);
