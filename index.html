@@ -9,104 +9,141 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..900&display=swap">
 <style>
-/* Concepto: la puerta de la nevera de un piso compartido.
-   Fondo blanco-nevera frío, listas sueltas sin tarjetas, un color de imán por compañero
-   y el código del piso como letras magnéticas (el único elemento llamativo). */
+/* Tablon de la nevera: cada seccion es una nota pegada con celo sobre papel cuadriculado.
+   Cada apartado tiene su color y cada companero su iman. */
 :root{
-  /* paleta del logo: azul cielo, azul marino y verde salvia */
-  --bg:#EEF6FC;
   --paper:#FFFFFF;
-  --ink:#1B2F4B;
-  --primary:#2F4F79;
-  --primary-on:#FFFFFF;
-  --ok:#5B9A81;
-  --muted:#52647C;
-  --line:#C9DCEC;
+  --ink:#16243A;
+  --muted:#5A6A80;
+  --line:#D5E2EF;
   --bad:#B3261E;
   --focus:#2F4F79;
   --alert-bg:#FFF0CF; --alert-ink:#5A3B00;
-  /* imanes: uno por compañero, afinados para convivir con el azul y el salvia */
-  --m1:#D8644C; --m1t:#FFFFFF;
-  --m2:#EDB84A; --m2t:#1B2F4B;
-  --m3:#4E9A82; --m3t:#FFFFFF;
-  --m4:#6B79CC; --m4t:#FFFFFF;
-  --m5:#C45B8A; --m5t:#FFFFFF;
-  --m6:#3C8DB4; --m6t:#FFFFFF;
+  --board:#E7F1FA; --board-2:#F6FAFE; --grid:rgba(47,79,121,.07);
+  --tape:rgba(240,214,140,.75); --tape-edge:rgba(198,166,74,.5);
+  --shadow:0 2px 0 rgba(22,36,58,.06), 0 10px 24px -14px rgba(22,36,58,.45);
+  --primary:#2F4F79; --primary-on:#FFFFFF; --ok:#5B9A81;
+  --accent:#2F4F79; --accent-soft:#DDE9F6;
+  --m1:#D8644C; --m1t:#FFF; --m2:#EDB84A; --m2t:#16243A; --m3:#4E9A82; --m3t:#FFF;
+  --m4:#6B79CC; --m4t:#FFF; --m5:#C45B8A; --m5t:#FFF; --m6:#3C8DB4; --m6t:#FFF;
   --font:'Archivo','Arial Narrow',system-ui,-apple-system,'Segoe UI',sans-serif;
   color-scheme:light;
 }
-@media (prefers-color-scheme: dark){
-  :root:not([data-theme="light"]){
-    --bg:#0E1A2A; --paper:#15253A; --ink:#E6EEF8; --primary:#9CC3EE; --primary-on:#0E1A2A; --ok:#7BBFA3; --muted:#9DB0C6; --line:#27405C; --bad:#FF8E85; --focus:#9CC3EE;
-    --alert-bg:#3A2F14; --alert-ink:#F5D48A;
-    --m2t:#1B2F4B; color-scheme:dark;
-  }
-}
-:root[data-theme="dark"]{
-  --bg:#0E1A2A; --paper:#15253A; --ink:#E6EEF8; --primary:#9CC3EE; --primary-on:#0E1A2A; --ok:#7BBFA3; --muted:#9DB0C6; --line:#27405C; --bad:#FF8E85; --focus:#9CC3EE;
+@media (prefers-color-scheme: dark){ :root:not([data-theme="light"]){
+  --paper:#17222F; --ink:#E7EFF8; --muted:#9BAFC6; --line:#2B3C4F; --bad:#FF8E85; --focus:#9CC3EE;
   --alert-bg:#3A2F14; --alert-ink:#F5D48A;
-  --m2t:#1B2F4B; color-scheme:dark;
+  --board:#0D161F; --board-2:#111C27; --grid:rgba(156,195,238,.07);
+  --tape:rgba(196,168,96,.4); --tape-edge:rgba(120,100,50,.5);
+  --shadow:0 2px 0 rgba(0,0,0,.3), 0 12px 26px -14px rgba(0,0,0,.9);
+  --primary:#9CC3EE; --primary-on:#0E1A2A; --ok:#7BBFA3;
+  --accent:#9CC3EE; --accent-soft:#1E3047; --m2t:#16243A; color-scheme:dark;
+}}
+:root[data-theme="dark"]{
+  --paper:#17222F; --ink:#E7EFF8; --muted:#9BAFC6; --line:#2B3C4F; --bad:#FF8E85; --focus:#9CC3EE;
+  --alert-bg:#3A2F14; --alert-ink:#F5D48A;
+  --board:#0D161F; --board-2:#111C27; --grid:rgba(156,195,238,.07);
+  --tape:rgba(196,168,96,.4); --tape-edge:rgba(120,100,50,.5);
+  --shadow:0 2px 0 rgba(0,0,0,.3), 0 12px 26px -14px rgba(0,0,0,.9);
+  --primary:#9CC3EE; --primary-on:#0E1A2A; --ok:#7BBFA3;
+  --accent:#9CC3EE; --accent-soft:#1E3047; --m2t:#16243A; color-scheme:dark;
 }
+/* color propio de cada apartado */
+body[data-tab="piso"]     { --accent:#2F4F79; --accent-soft:#DDE9F6 }
+body[data-tab="compra"]   { --accent:#3F8F6B; --accent-soft:#DCEFE6 }
+body[data-tab="limpieza"] { --accent:#3C8DB4; --accent-soft:#D9ECF6 }
+body[data-tab="facturas"] { --accent:#B07B18; --accent-soft:#FBEED2 }
+@media (prefers-color-scheme: dark){ :root:not([data-theme="light"]) body[data-tab="piso"]{--accent:#9CC3EE;--accent-soft:#1E3047}
+  :root:not([data-theme="light"]) body[data-tab="compra"]{--accent:#7BC5A2;--accent-soft:#17302A}
+  :root:not([data-theme="light"]) body[data-tab="limpieza"]{--accent:#7FC0DE;--accent-soft:#15303E}
+  :root:not([data-theme="light"]) body[data-tab="facturas"]{--accent:#E9BC63;--accent-soft:#35290F} }
+:root[data-theme="dark"] body[data-tab="piso"]{--accent:#9CC3EE;--accent-soft:#1E3047}
+:root[data-theme="dark"] body[data-tab="compra"]{--accent:#7BC5A2;--accent-soft:#17302A}
+:root[data-theme="dark"] body[data-tab="limpieza"]{--accent:#7FC0DE;--accent-soft:#15303E}
+:root[data-theme="dark"] body[data-tab="facturas"]{--accent:#E9BC63;--accent-soft:#35290F}
+
 *{box-sizing:border-box}
 html,body{margin:0}
 body{
-  background:var(--bg); color:var(--ink);
-  font:16px/1.45 var(--font);
+  color:var(--ink); font:16px/1.45 var(--font);
+  background:
+    linear-gradient(var(--grid) 1px, transparent 1px) 0 0/22px 22px,
+    linear-gradient(90deg, var(--grid) 1px, transparent 1px) 0 0/22px 22px,
+    radial-gradient(120% 80% at 50% 0%, var(--board-2), var(--board) 70%);
+  background-attachment:fixed;
   padding-left:max(16px,env(safe-area-inset-left,0px));
   padding-right:max(16px,env(safe-area-inset-right,0px));
   padding-block:0; min-height:100vh;
 }
-.app{max-width:480px;margin:0 auto;padding-bottom:calc(96px + env(safe-area-inset-bottom,0px))}
+.app{max-width:480px;margin:0 auto;padding-bottom:calc(104px + env(safe-area-inset-bottom,0px))}
 [hidden]{display:none!important}
 h1,h2{margin:0;text-wrap:balance}
-h1{font-weight:850;font-stretch:118%;font-size:36px;line-height:1.02;letter-spacing:-.02em;overflow-wrap:anywhere}
-h2{font-weight:750;font-stretch:108%;font-size:20px;line-height:1.15;letter-spacing:-.01em}
+h1{font-weight:850;font-stretch:118%;font-size:33px;line-height:1.04;letter-spacing:-.02em;overflow-wrap:anywhere}
+h2{font-weight:800;font-stretch:108%;font-size:19px;line-height:1.15;letter-spacing:-.01em}
 button,input,select{font:inherit;color:inherit}
 button{cursor:pointer}
-:focus-visible{outline:3px solid var(--focus);outline-offset:2px;border-radius:6px}
+:focus-visible{outline:3px solid var(--focus);outline-offset:2px;border-radius:8px}
 
-/* iconos de color de compañero */
 .m1{--c:var(--m1);--ct:var(--m1t)} .m2{--c:var(--m2);--ct:var(--m2t)} .m3{--c:var(--m3);--ct:var(--m3t)}
 .m4{--c:var(--m4);--ct:var(--m4t)} .m5{--c:var(--m5);--ct:var(--m5t)} .m6{--c:var(--m6);--ct:var(--m6t)}
 .mag{background:var(--c);color:var(--ct)}
 
 /* cabecera */
-.top{padding:calc(14px + env(safe-area-inset-top,0px)) 0 20px}
+.top{padding:calc(14px + env(safe-area-inset-top,0px)) 0 16px}
 .logo{display:block;width:72px;height:auto}
-.meta{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:16px;font-size:14px;font-weight:600}
-.status{display:inline-flex;align-items:center;gap:7px;color:var(--muted);font-weight:500}
+.meta{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px;font-size:14px;font-weight:600}
+.status{display:inline-flex;align-items:center;gap:7px;color:var(--muted);font-weight:600;background:var(--paper);
+  border:1px solid var(--line);border-radius:99px;padding:5px 12px;box-shadow:var(--shadow)}
 .status i{width:8px;height:8px;border-radius:50%;background:var(--ok)}
 .status.demo i{background:var(--m2)}
+.top h1{padding-left:14px;border-left:6px solid var(--accent)}
 
-/* secciones sin tarjetas */
-.sec{padding:22px 0 8px;border-top:2px solid var(--primary)}
-.sec+.sec{margin-top:18px}
-.sec-head{display:flex;align-items:baseline;justify-content:space-between;gap:12px;margin-bottom:4px}
-.count{font-size:14px;font-weight:600;color:var(--muted);font-variant-numeric:tabular-nums}
-.sub{margin:4px 0 12px;color:var(--muted);font-size:15px;max-width:44ch}
+/* selector de pisos de ejemplo */
+.pisos{display:flex;gap:8px;overflow-x:auto;padding:12px 2px 4px;margin:0 -2px;scrollbar-width:none}
+.pisos::-webkit-scrollbar{display:none}
+.pisos button{flex:none;background:var(--paper);border:1.5px solid var(--line);border-radius:99px;
+  padding:8px 14px;font-size:14px;font-weight:700;color:var(--muted);box-shadow:var(--shadow);white-space:nowrap}
+.pisos button[aria-pressed="true"]{background:var(--accent);border-color:var(--accent);color:var(--primary-on)}
+.pisos-label{font-size:12px;font-weight:800;letter-spacing:.06em;color:var(--muted);text-transform:uppercase;margin-top:6px}
+
+/* notas pegadas al tablon */
+.sec{position:relative;background:var(--paper);border:1px solid var(--line);border-radius:4px 4px 14px 14px;
+  padding:26px 16px 16px;margin:26px 0 0;box-shadow:var(--shadow)}
+.sec::before{content:"";position:absolute;top:-11px;left:50%;width:92px;height:22px;transform:translateX(-50%) rotate(-1.6deg);
+  background:var(--tape);border-left:1px dashed var(--tape-edge);border-right:1px dashed var(--tape-edge);border-radius:2px}
+.sec:nth-of-type(even)::before{transform:translateX(-50%) rotate(1.4deg);left:46%}
+.sec-head{display:flex;align-items:baseline;justify-content:space-between;gap:12px}
+.sec h2{color:var(--accent)}
+.count{font-size:13px;font-weight:800;color:var(--accent);background:var(--accent-soft);border-radius:99px;padding:3px 10px;
+  font-variant-numeric:tabular-nums;white-space:nowrap}
+.sub{margin:6px 0 12px;color:var(--muted);font-size:15px;max-width:44ch}
 
 /* formularios */
-.panel{background:var(--paper);border:1px solid var(--line);border-radius:14px;padding:16px;margin-top:14px;display:grid;gap:12px}
+.panel{background:var(--accent-soft);border-radius:12px;padding:14px;margin-top:14px;display:grid;gap:12px}
 .stack{display:grid;gap:12px}
 .row{display:flex;gap:8px;align-items:flex-end}
 .row>*{min-width:0}
 .row>label,.row>input{flex:1}
-label{display:grid;gap:5px;font-size:14px;font-weight:600}
-input,select{width:100%;min-height:48px;padding:10px 12px;border-radius:9px;border:1.5px solid var(--line);background:var(--bg);color:var(--ink)}
+label{display:grid;gap:5px;font-size:14px;font-weight:700}
+input,select{width:100%;min-height:48px;padding:10px 12px;border-radius:10px;border:1.5px solid var(--line);
+  background:var(--paper);color:var(--ink)}
 input::placeholder{color:var(--muted);opacity:.9}
-.btn{min-height:48px;padding:10px 18px;border-radius:9px;border:1.5px solid var(--primary);background:var(--primary);color:var(--primary-on);font-weight:700;flex:none}
-.btn.ghost{background:transparent;color:var(--primary)}
-.btn.danger{background:transparent;border-color:var(--bad);color:var(--bad)}
+.btn{min-height:48px;padding:10px 18px;border-radius:10px;border:1.5px solid var(--accent);background:var(--accent);
+  color:var(--primary-on);font-weight:800;flex:none;box-shadow:0 2px 0 rgba(22,36,58,.12)}
+.btn.ghost{background:var(--paper);color:var(--accent)}
+.btn.danger{background:var(--paper);border-color:var(--bad);color:var(--bad)}
 .btn.small{min-height:40px;padding:6px 14px;font-size:15px}
 .btn:disabled{opacity:.5;cursor:wait}
-.link{background:none;border:0;padding:6px 0;font-weight:700;text-decoration:underline;text-underline-offset:3px;color:var(--primary)}
+.link{background:none;border:0;padding:6px 0;font-weight:800;text-decoration:underline;text-underline-offset:3px;color:var(--accent)}
+#fBill .row{align-items:flex-start}
+.err{color:var(--bad);font-size:13px;font-weight:700}
+input.invalid,select.invalid{border-color:var(--bad)}
 
 /* letras de nevera */
-.tiles{display:flex;gap:7px;margin:4px 0 10px}
-.tile{flex:1;max-width:58px;aspect-ratio:3/4;display:grid;place-items:center;border-radius:7px;
-  font-weight:900;font-stretch:125%;font-size:30px;line-height:1;box-shadow:0 2px 0 rgba(0,0,0,.28)}
-.tile:nth-child(odd){transform:rotate(-2.5deg)}
-.tile:nth-child(even){transform:rotate(2deg) translateY(2px)}
+.tiles{display:flex;gap:7px;margin:10px 0;justify-content:center}
+.tile{flex:1;max-width:56px;aspect-ratio:3/4;display:grid;place-items:center;border-radius:8px;
+  font-weight:900;font-stretch:125%;font-size:30px;line-height:1;box-shadow:0 3px 0 rgba(0,0,0,.25), inset 0 2px 0 rgba(255,255,255,.35)}
+.tile:nth-child(odd){transform:rotate(-3deg)}
+.tile:nth-child(even){transform:rotate(2.2deg) translateY(3px)}
 
 /* listas */
 .list{list-style:none;margin:0;padding:0}
@@ -115,55 +152,58 @@ input::placeholder{color:var(--muted);opacity:.9}
 .list.receipt li{border-top:1.5px dashed var(--line);align-items:flex-start}
 .list.receipt li:first-child{border-top:0}
 .grow{flex:1;min-width:0;overflow-wrap:anywhere}
-.name{font-weight:700;font-size:17px}
+.name{font-weight:800;font-size:17px}
 .small{font-size:14px}
 .dim{color:var(--muted)}
 .done{text-decoration:line-through;color:var(--muted)}
-.mag-dot{flex:none;width:44px;height:44px;border-radius:50%;display:grid;place-items:center;font-weight:850;font-stretch:115%;font-size:19px}
+.mag-dot{flex:none;width:44px;height:44px;border-radius:50%;display:grid;place-items:center;font-weight:850;
+  font-stretch:115%;font-size:19px;box-shadow:0 2px 0 rgba(0,0,0,.18), inset 0 2px 0 rgba(255,255,255,.3)}
 .meta-line{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-top:4px}
 .meta-line .chip{margin-top:0}
-.state{font-size:13px;font-weight:700;padding:2px 10px;border-radius:99px;border:1.5px solid var(--line);color:var(--muted);white-space:nowrap}
+.state{font-size:13px;font-weight:800;padding:2px 10px;border-radius:99px;border:1.5px solid var(--line);color:var(--muted);white-space:nowrap}
 .state.ok{background:var(--ok);color:#fff;border-color:transparent}
-.chip{display:inline-block;margin-top:4px;padding:2px 10px;border-radius:99px;font-size:13px;font-weight:700}
-.you{font-size:13px;font-weight:700;border:1.5px solid var(--primary);color:var(--primary);border-radius:99px;padding:1px 9px}
-.check{flex:none;width:32px;height:32px;border-radius:8px;border:2px solid var(--primary);background:transparent;display:grid;place-items:center;color:transparent}
+.chip{display:inline-block;margin-top:4px;padding:2px 10px;border-radius:99px;font-size:13px;font-weight:800}
+.you{font-size:13px;font-weight:800;border:1.5px solid var(--accent);color:var(--accent);border-radius:99px;padding:1px 9px}
+.check{flex:none;width:32px;height:32px;border-radius:9px;border:2px solid var(--accent);background:var(--paper);
+  display:grid;place-items:center;color:transparent}
 .check[aria-pressed="true"]{background:var(--ok);border-color:var(--ok);color:#fff}
 .check:disabled{border-color:var(--line);cursor:not-allowed}
 .check:disabled[aria-pressed="true"]{background:var(--line);color:var(--muted)}
-.x{flex:none;width:40px;height:40px;border-radius:9px;border:0;background:transparent;color:var(--muted);display:grid;place-items:center}
-.x:hover{color:var(--bad)}
+.x{flex:none;width:40px;height:40px;border-radius:10px;border:0;background:transparent;color:var(--muted);display:grid;place-items:center}
+.x:hover{color:var(--bad);background:var(--accent-soft)}
 .amount{font-weight:850;font-stretch:112%;font-size:20px;font-variant-numeric:tabular-nums;white-space:nowrap}
-.due{font-size:13px;font-weight:700;white-space:nowrap}
-.due.soon{color:var(--ink);background:var(--m2);color:var(--m2t);padding:2px 9px;border-radius:99px}
+.due{font-size:13px;font-weight:800;white-space:nowrap}
+.due.soon{background:var(--m2);color:var(--m2t);padding:2px 9px;border-radius:99px}
 .due.late{color:var(--bad)}
 .right{display:grid;justify-items:end;gap:5px}
-.alert{display:block;width:100%;text-align:left;margin:16px 0 0;padding:12px 14px;border:1.5px solid var(--m2);border-radius:12px;background:var(--alert-bg);color:var(--alert-ink);font-size:15px;font-weight:500}
-.alert b{display:block;font-weight:800;margin-bottom:2px}
-.list.receipt li.urgent{background:var(--alert-bg);border-radius:12px;padding-left:12px;padding-right:12px;margin:4px -12px;border-top-color:transparent}
-.list.receipt li.urgent+li{border-top-color:transparent}
-#fBill .row{align-items:flex-start}
-.err{color:var(--bad);font-size:13px;font-weight:600}
-input.invalid,select.invalid{border-color:var(--bad)}
-.empty{padding:16px 0;color:var(--muted);font-size:15px;display:block!important;min-height:0!important}
+.empty{padding:18px 0;color:var(--muted);font-size:15px;display:block!important;min-height:0!important;text-align:center}
 
-/* progreso de la semana: un tramo por zona, con el color de quien la limpia */
-.seg{display:flex;gap:4px;margin:10px 0 6px}
-.seg i{flex:1;height:10px;border-radius:3px;background:var(--line)}
+/* tramos de la semana */
+.seg{display:flex;gap:4px;margin:12px 0 6px}
+.seg i{flex:1;height:12px;border-radius:4px;background:var(--line)}
 .seg i.on{background:var(--c)}
 
-/* menú inferior */
-.nav{position:fixed;left:0;right:0;bottom:0;z-index:5;background:var(--paper);border-top:1px solid var(--line);
+/* menu inferior */
+.nav{position:fixed;left:0;right:0;bottom:0;z-index:5;
+  background:color-mix(in srgb, var(--paper) 92%, transparent);
+  backdrop-filter:blur(10px);border-top:1px solid var(--line);
   padding:8px max(10px,env(safe-area-inset-right,0px)) calc(8px + env(safe-area-inset-bottom,0px)) max(10px,env(safe-area-inset-left,0px))}
 .nav-in{max-width:480px;margin:0 auto;display:grid;grid-template-columns:repeat(4,1fr);gap:4px}
-.nav button{background:transparent;border:0;border-radius:99px;min-height:44px;font-weight:700;font-size:15px;color:var(--muted)}
-.nav button[aria-current="page"]{background:var(--primary);color:var(--primary-on)}
+.nav button{background:transparent;border:0;border-radius:99px;min-height:46px;font-weight:800;font-size:15px;color:var(--muted)}
+.nav button[aria-current="page"]{background:var(--accent);color:var(--primary-on);box-shadow:0 2px 0 rgba(22,36,58,.15)}
 
-.notice{border:2px solid var(--bad);border-radius:12px;padding:14px;margin:0 0 16px;font-size:15px}
+.notice{border:2px solid var(--bad);border-radius:12px;padding:14px;margin:0 0 16px;font-size:15px;background:var(--paper)}
 .notice ol{margin:8px 0 0;padding-left:20px}
-.toast{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(88px + env(safe-area-inset-bottom,0px));z-index:9;
-  max-width:min(440px,calc(100vw - 32px));background:var(--ink);color:var(--bg);padding:12px 16px;border-radius:10px;font-size:15px;font-weight:600}
+.alert{display:block;width:100%;text-align:left;margin:16px 0 0;padding:12px 14px;border:1.5px solid var(--m2);
+  border-radius:12px;background:var(--alert-bg);color:var(--alert-ink);font-size:15px;font-weight:600;box-shadow:var(--shadow)}
+.alert b{display:block;font-weight:900;margin-bottom:2px}
+.list.receipt li.urgent{background:var(--alert-bg);border-radius:12px;padding-left:12px;padding-right:12px;margin:4px -12px;border-top-color:transparent}
+.list.receipt li.urgent+li{border-top-color:transparent}
+.toast{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(94px + env(safe-area-inset-bottom,0px));z-index:9;
+  max-width:min(440px,calc(100vw - 32px));background:var(--ink);color:var(--paper);padding:12px 16px;border-radius:12px;font-size:15px;font-weight:700}
 .loading{display:grid;place-items:center;min-height:50vh;color:var(--muted)}
-.confirm{border:2px solid var(--bad);border-radius:12px;padding:12px;margin-top:10px}
+.confirm{border:2px solid var(--bad);border-radius:12px;padding:12px;margin-top:10px;background:var(--paper)}
+@media (prefers-reduced-motion:reduce){ *{transition:none!important} }
 </style>
 </head>
 <body>
@@ -244,36 +284,66 @@ function remoteApi(sb, uid){
       if (!rows.length) throw new Error('Solo puedes marcar tus propias tareas.');
     },
     async bills(aptId){ return ok(await sb.from('recurring_bills').select('id,name,amount,frequency,next_due_date,paid_by,is_paused').eq('apartment_id', aptId).eq('is_paused', false).order('next_due_date').order('name')); },
-    async addBill(aptId,b){ ok(await sb.from('recurring_bills').insert({apartment_id:aptId,...b})); }
+    async addBill(aptId,b){ ok(await sb.from('recurring_bills').insert({apartment_id:aptId,...b})); },
+    async billPayments(aptId){ return ok(await sb.from('bill_payments').select('bill_id,user_id,due_date').eq('apartment_id', aptId)); },
+    async payShare(aptId,billId,due){ ok(await sb.from('bill_payments').insert({apartment_id:aptId,bill_id:billId,user_id:uid,due_date:due})); },
+    async unpayShare(billId,due){ ok(await sb.from('bill_payments').delete().eq('bill_id',billId).eq('due_date',due).eq('user_id',uid)); },
+    async advanceBill(billId){ ok(await sb.rpc('advance_bill',{p_bill_id:billId})); }
   };
 }
 
 /* ---------- capa de datos: ejemplo en memoria ---------- */
-function demoApi(){
-  const me = 'u-marta', other = 'u-leo', third = 'u-sara';
+const PISOS = {
+  lavapies: { nombre:'Piso de Lavapiés', code:'K7P2QX',
+    miembros:['Marta','Leo','Sara'],
+    zonas:['Baño','Cocina','Salón','Terraza'],
+    compra:[['Leche',0],['Papel higiénico',0],['Café',0],['Detergente',0],['Pan',1],['Huevos',1]],
+    facturas:[['Luz',72.4,'monthly',2,0,0],['Comunidad',45,'quarterly',6,0,0],['Seguro del hogar',19.9,'monthly',1,0,1],
+              ['Internet',39.9,'monthly',16,1,0],['Agua',28.15,'quarterly',-2,2,0]], saldo:-12.5 },
+  cunef: { nombre:'Piso de CUNEF', code:'D5F011',
+    miembros:['Ariadna','Manu','Gabi','Pablo'],
+    zonas:['Baño','Cocina','Pasillo'],
+    compra:[['Arroz',0],['Aceite de oliva',0],['Bolsas de basura',0],['Leche',1]],
+    facturas:[['Luz',96.3,'monthly',0,1,0],['Internet',42,'monthly',11,0,0],['Gas',54.8,'bimonthly',24,2,0],['Agua',31.2,'quarterly',38,3,0]], saldo:26.4 },
+  chamberi: { nombre:'Piso de Chamberí', code:'T3X9ZK',
+    miembros:['Clara','Diego'],
+    zonas:['Baño','Cocina'],
+    compra:[['Fruta',0],['Pasta',1]],
+    facturas:[['Alquiler del garaje',60,'monthly',4,0,0],['Luz',48.7,'monthly',19,1,0]], saldo:0 }
+};
+let pisoDemo = 'lavapies';
+
+function demoApi(clave){
+  pisoDemo = clave || pisoDemo;
+  const P = PISOS[pisoDemo];
+  const uid = n => 'u-' + pisoDemo + '-' + n;
+  const me = uid(0);
   const db = {
-    myName:'Marta',
-    apt:{id:'apt1',name:'Piso de Lavapiés',invite_code:'K7P2QX'},
-    members:[{id:me,name:'Marta'},{id:other,name:'Leo'},{id:third,name:'Sara'}],
-    items:[{id:'i1',name:'Leche',is_bought:false},{id:'i2',name:'Papel higiénico',is_bought:false},{id:'i3',name:'Pan',is_bought:true}],
-    zones:[{id:'z1',name:'Baño'},{id:'z2',name:'Cocina'},{id:'z3',name:'Salón'}],
-    done:{}, bills:[
-      {id:'b1',name:'Luz',amount:72.4,frequency:'monthly',next_due_date:iso(new Date(Date.now()+2*864e5)),paid_by:me,is_paused:false},
-      {id:'b4',name:'Comunidad',amount:45,frequency:'quarterly',next_due_date:iso(new Date(Date.now()+6*864e5)),paid_by:me,is_paused:false},
-      {id:'b5',name:'Seguro del hogar',amount:19.9,frequency:'monthly',next_due_date:iso(new Date(Date.now()+1*864e5)),paid_by:me,is_paused:true},
-      {id:'b2',name:'Internet',amount:39.9,frequency:'monthly',next_due_date:iso(new Date(Date.now()+16*864e5)),paid_by:other,is_paused:false},
-      {id:'b3',name:'Agua',amount:28.15,frequency:'quarterly',next_due_date:iso(new Date(Date.now()-2*864e5)),paid_by:third,is_paused:false}
-    ], n:10
+    myName: P.miembros[0],
+    apt: { id:'apt-'+pisoDemo, name:P.nombre, invite_code:P.code },
+    members: P.miembros.map((n,i) => ({ id:uid(i), name:n })),
+    items: P.compra.map(([name,b],i) => ({ id:'i'+i, name, is_bought:!!b })),
+    zones: P.zonas.map((name,i) => ({ id:'z'+i, name })),
+    done: {},
+    bills: P.facturas.map(([name,amount,frequency,dias,quien,pausada],i) => ({
+      id:'b'+i, name, amount, frequency, next_due_date: iso(new Date(Date.now()+dias*864e5)),
+      paid_by: uid(quien), is_paused: !!pausada })),
+    pagos: [], n: 100
   };
+  // una tarea de la semana ya hecha, para que la demo no salga vacía
+  const w = iso(mondayOf());
+  if (db.zones.length > 1) db.done['z1'+w] = new Date(Date.now()-864e5).toISOString();
+  if (db.bills.length && db.members.length > 1)
+    db.pagos.push({ bill_id: db.bills[0].id, user_id: uid(1), due_date: db.bills[0].next_due_date });
   const id = p => p + (db.n++);
-  const wait = v => new Promise(r => setTimeout(()=>r(v), 120));
+  const wait = v => new Promise(r => setTimeout(()=>r(v), 110));
   return {
-    kind:'demo', uid:me,
+    kind:'demo', uid:me, piso:pisoDemo,
     myName:()=>wait(db.myName), setName:n=>{ db.myName=n; db.members[0].name=n; return wait(); },
-    apartment:()=>wait(db.apt), createApartment:n=>{ db.apt={id:'apt1',name:n,invite_code:'M4R7TA'}; return wait(); },
-    joinApartment:c=>{ if (c.toUpperCase()!=='K7P2QX' && c.toUpperCase()!==(db.apt?.invite_code||'')) return Promise.reject(new Error('Código de piso no válido')); return wait(); },
+    apartment:()=>wait(db.apt), createApartment:n=>{ db.apt={id:'apt-nuevo',name:n,invite_code:'M4R7TA'}; return wait(); },
+    joinApartment:c=>{ const ok = Object.values(PISOS).some(p => p.code === c.toUpperCase()) || c.toUpperCase()===(db.apt?.invite_code||''); return ok ? wait() : Promise.reject(new Error('Código de piso no válido')); },
     members:()=>wait(db.members.slice()), leave:()=>{ db.apt=null; return wait(); },
-    myBalance:()=>wait(-12.5),
+    myBalance:()=>wait(P.saldo),
     items:()=>wait(db.items.slice().sort((a,b)=>a.is_bought-b.is_bought)),
     addItem:(a,name)=>{ if (db.items.some(i=>i.name.toLowerCase()===name.toLowerCase())) return Promise.reject({code:'23505',message:'dup'}); db.items.push({id:id('i'),name,is_bought:false}); return wait(); },
     setBought:(i,v)=>{ db.items.find(x=>x.id===i).is_bought=v; return wait(); },
@@ -284,11 +354,18 @@ function demoApi(){
     delZone:i=>{ db.zones=db.zones.filter(x=>x.id!==i); return wait(); },
     assignments:(a,week)=>{
       const wk = Math.floor((new Date(week+'T00:00:00') - new Date('2000-01-03T00:00:00'))/(7*864e5));
-      return wait(db.zones.map((z,i)=>{ const m = db.members[(i+wk)%db.members.length]; const k = z.id+week; return {id:k,user_id:m.id,is_done:!!db.done[k],done_at:db.done[k]||null,zone:z.name,name:m.name}; }));
+      return wait(db.zones.map((z,i)=>{ const m = db.members[(i+wk)%db.members.length]; const k = z.id+week;
+        return {id:k,user_id:m.id,is_done:!!db.done[k],done_at:db.done[k]||null,zone:z.name,name:m.name}; }));
     },
     setDone:(i,v)=>{ db.done[i]= v ? new Date().toISOString() : null; return wait(); },
     bills:()=>wait(db.bills.filter(b=>!b.is_paused).sort((a,b)=>a.next_due_date.localeCompare(b.next_due_date)||a.name.localeCompare(b.name,'es'))),
-    addBill:(a,b)=>{ db.bills.push({id:id('b'),is_paused:false,...b}); return wait(); }
+    addBill:(a,b)=>{ db.bills.push({id:id('b'),is_paused:false,...b}); return wait(); },
+    billPayments:()=>wait(db.pagos.slice()),
+    payShare:(a,billId,due)=>{ db.pagos.push({bill_id:billId,user_id:me,due_date:due}); return wait(); },
+    unpayShare:(billId,due)=>{ db.pagos = db.pagos.filter(p=>!(p.bill_id===billId && p.due_date===due && p.user_id===me)); return wait(); },
+    advanceBill:(billId)=>{ const b = db.bills.find(x=>x.id===billId); const d = new Date(b.next_due_date+'T00:00:00');
+      const saltos={weekly:()=>d.setDate(d.getDate()+7),monthly:()=>d.setMonth(d.getMonth()+1),bimonthly:()=>d.setMonth(d.getMonth()+2),quarterly:()=>d.setMonth(d.getMonth()+3),yearly:()=>d.setFullYear(d.getFullYear()+1)};
+      (saltos[b.frequency]||saltos.monthly)(); b.next_due_date = iso(d); return wait(); }
   };
 }
 
@@ -362,9 +439,14 @@ async function refreshApt(){
 /* ---------- vistas ---------- */
 function header(title){
   const demo = S.api.kind === 'demo';
+  const pisos = demo ? `<div class="pisos-label">Pisos de ejemplo</div><div class="pisos">${
+    Object.entries(PISOS).map(([k,p]) => `<button data-piso="${k}" aria-pressed="${S.api.piso===k}">${esc(p.nombre)}</button>`).join('')}</div>` : '';
   return `<header class="top"><div class="meta">${LOGO_IMG}
-    <span class="status ${demo?'demo':''}"><i></i>${demo?'Datos de ejemplo':'Conectado'}</span></div>
-    <h1>${esc(title)}</h1>${bannerHtml()}</header>`;
+    <span style="display:flex;gap:8px;align-items:center">
+      <span class="status ${demo?'demo':''}"><i></i>${demo?'Datos de ejemplo':'Conectado'}</span>
+      <button class="status" data-go="ayuda" aria-label="Cómo funciona la app" style="font-weight:900">?</button>
+    </span></div>
+    <h1>${esc(title)}</h1>${pisos}${bannerHtml()}</header>`;
 }
 function dueWords(d){
   if (d < 0) return `venció hace ${-d} ${-d===1?'día':'días'}`;
@@ -379,20 +461,25 @@ function bannerHtml(){
   const lines = urgent.slice(0,3).map(b => `${esc(b.name)} ${dueWords(daysUntil(b.next_due_date))}`).join('. ');
   return `<button class="alert" data-go="facturas"><b>${urgent.length===1?'Una factura vence pronto':urgent.length+' facturas vencen pronto'}</b>${lines}.</button>`;
 }
-app.addEventListener('click', e => {
+app.addEventListener('click', async e => {
+  const p = e.target.closest('[data-piso]');
+  if (p){ if (p.dataset.piso === S.api.piso) return; S.api = demoApi(p.dataset.piso); S.editItem = null; await start(); window.scrollTo(0,0); return; }
   const g = e.target.closest('[data-go]'); if (!g) return;
   S.tab = g.dataset.go; S.editItem = null; render(); window.scrollTo(0,0);
 });
 function renderNav(){
   $('#navIn').innerHTML = TABS.map(([k,l]) => `<button data-tab="${k}" ${S.tab===k?'aria-current="page"':''}>${l}</button>`).join('');
+  document.body.dataset.tab = S.tab;
   $('#navIn').querySelectorAll('button').forEach(b => b.onclick = () => { S.tab = b.dataset.tab; S.editItem = null; render(); window.scrollTo(0,0); });
 }
 async function render(){
   if (!S.apt){ S.bills = []; $('#nav').hidden = true; return renderOnboarding(); }
   $('#nav').hidden = false; renderNav();
+  document.body.dataset.tab = S.tab;
   try{
     if (S.tab !== 'facturas'){ try{ S.bills = await S.api.bills(S.apt.id); }catch{ S.bills = []; } }
-    if (S.tab==='piso') renderPiso();
+    if (S.tab==='ayuda') renderAyuda();
+    else if (S.tab==='piso') renderPiso();
     else if (S.tab==='compra') await renderCompra();
     else if (S.tab==='limpieza') await renderLimpieza();
     else await renderFacturas();
@@ -594,37 +681,78 @@ async function renderLimpieza(){
   });
 }
 
-/* Facturas periódicas: alta y listado por vencimiento (TEO-34, TEO-31) */
-function clearFieldError(id){
-  const el = $('#'+id), er = $('#e'+id.slice(1));
-  if (er){ er.hidden = true; er.textContent = ''; }
-  if (el){ el.classList.remove('invalid'); el.removeAttribute('aria-invalid'); }
+/* Cómo funciona la app */
+const PASOS = [
+  ['1','Crea tu piso o únete','Quien monta el piso recibe un código de 6 letras. Los demás lo escriben una vez y ya están dentro. Todos veis lo mismo al instante.'],
+  ['2','Apuntad la compra','Cualquiera añade lo que falta en casa. Quien va al súper lo va tachando, y al lado queda su nombre para que se sepa quién ha ido.'],
+  ['3','Repartid la limpieza','Definís las zonas una vez y la app reparte los turnos cada semana, rotando para que no le toque siempre lo mismo a la misma persona. Cada uno marca su tarea cuando la hace.'],
+  ['4','Controlad las facturas','Dad de alta la luz, el agua o el internet con su importe y cada cuánto se repiten. La app os avisa de los vencimientos, divide el importe entre los del piso y cada uno marca cuando ha pagado su parte.'],
+  ['5','Compartid el enlace','La app se abre desde el navegador del móvil, sin instalar nada. Pásale el enlace a tus compañeros.']
+];
+function renderAyuda(){
+  app.innerHTML = `${header('Cómo funciona')}
+    <section class="sec">
+      <h2>TodoenOrden en cinco pasos</h2>
+      <p class="sub">La app para que un piso compartido no acabe a mensajes por el grupo.</p>
+      <ul class="list">${PASOS.map(([n,t,d]) => `
+        <li><span class="mag-dot mag m${n}">${n}</span>
+          <span class="grow"><span class="name">${esc(t)}</span><br><span class="small dim">${esc(d)}</span></span></li>`).join('')}</ul>
+    </section>
+    <section class="sec">
+      <h2>Lo que conviene saber</h2>
+      <ul class="list">
+        <li><span class="grow"><span class="name">Tu sitio vive en este navegador</span><br><span class="small dim">No hay usuario ni contraseña. Si borras los datos del navegador o cambias de móvil, tendrás que volver a entrar con el código del piso.</span></span></li>
+        <li><span class="grow"><span class="name">Todo es compartido</span><br><span class="small dim">Lo que añade uno lo ven los demás. Nadie de fuera del piso puede ver vuestros datos.</span></span></li>
+        <li><span class="grow"><span class="name">Solo tú marcas lo tuyo</span><br><span class="small dim">Tus turnos de limpieza y tu parte de cada factura solo los puedes marcar tú.</span></span></li>
+      </ul>
+      <button class="btn" data-go="piso" style="margin-top:14px;width:100%">Entendido, volver al piso</button>
+    </section>`;
 }
+
+/* Facturas periódicas: alta, reparto entre compañeros y pago de tu parte (TEO-34, TEO-31) */
+const REPITE = {weekly:'cada semana',monthly:'cada mes',bimonthly:'cada 2 meses',quarterly:'cada 3 meses',yearly:'cada año'};
 async function renderFacturas(){
-  const bills = await S.api.bills(S.apt.id); S.bills = bills;
+  const [bills, pagos] = await Promise.all([S.api.bills(S.apt.id), S.api.billPayments(S.apt.id).catch(()=>[])]);
+  S.bills = bills;
   const who = id => S.members.find(m => m.id === id)?.name || 'Alguien';
+  const n = Math.max(S.members.length, 1);
   app.innerHTML = `${header('Facturas')}
     <section class="sec">
       <div class="sec-head"><h2>Próximos vencimientos</h2><span class="count">${bills.length}</span></div>
-      <p class="sub">Ordenadas por la fecha en que vencen.</p>
+      <p class="sub">Se repiten solas. El importe se divide entre los ${n === 1 ? 'del piso' : n + ' compañeros'} y cada uno marca su parte.</p>
       <ul class="list receipt">${bills.length ? bills.map(b => {
         const d = daysUntil(b.next_due_date);
         const urgent = d < 3;
         const label = d < 0 ? `Vencida hace ${-d} d` : d === 0 ? 'Vence hoy' : d === 1 ? 'Vence mañana' : d === 2 ? 'Vence en 2 días' : `En ${d} d`;
         const due = d < 0 ? `<span class="due late">${label}</span>` : urgent ? `<span class="due soon">${label}</span>` : `<span class="due dim">${label}</span>`;
-        return `<li class="${urgent?'urgent':''}"><span class="grow"><span class="name">${esc(b.name)}</span><br>
-            <span class="small dim">${esc(fmtDate(b.next_due_date))} · ${esc(FREQ[b.frequency])}</span><br>
-            <span class="chip mag ${mc(b.paid_by)}">La adelanta ${esc(who(b.paid_by))}</span></span>
-          <span class="right"><span class="amount">${eur(b.amount)}</span>${due}</span></li>`; }).join('')
-        : '<li class="empty">Todavía no hay facturas. Da de alta la luz, el agua o el internet.</li>'}</ul>
+        const parte = Number(b.amount) / n;
+        const hechos = pagos.filter(p => p.bill_id === b.id && p.due_date === b.next_due_date);
+        const yoPago = hechos.some(p => p.user_id === S.api.uid);
+        const todos = hechos.length >= n;
+        return `<li class="${urgent && !todos ? 'urgent' : ''}"><span class="grow">
+            <span class="name">${esc(b.name)}</span><br>
+            <span class="small dim">${esc(fmtDate(b.next_due_date))} · se repite ${esc(REPITE[b.frequency] || 'cada mes')} · la adelanta ${esc(who(b.paid_by))}</span>
+            <span class="meta-line">${S.members.map(m => {
+              const ok = hechos.some(p => p.user_id === m.id);
+              return `<span class="state ${ok?'ok':''}" title="${ok?'ha pagado su parte':'le falta pagar'}">${esc(m.name)}${ok?' ✓':''}</span>`;
+            }).join('')}</span>
+            <span class="meta-line">
+              <button class="btn small ${yoPago?'ghost':''}" data-pay="${b.id}" data-due="${b.next_due_date}" data-on="${yoPago}">${yoPago ? 'Ya he pagado mi parte ✓' : `Pagar mi parte (${eur(parte)})`}</button>
+              ${todos ? `<button class="btn small ghost" data-next="${b.id}">Pasar al siguiente vencimiento</button>` : ''}
+            </span>
+            ${todos ? '<span class="meta-line"><span class="state ok">Pagada entre todos</span></span>' : ''}
+          </span>
+          <span class="right"><span class="amount">${eur(b.amount)}</span><span class="small dim">tu parte ${eur(parte)}</span>${due}</span></li>`; }).join('')
+        : '<li class="empty">Todavía no hay facturas. Da de alta la luz, el agua o el internet y se repetirán solas.</li>'}</ul>
     </section>
     <section class="sec">
       <h2>Nueva factura periódica</h2>
+      <p class="sub">Se guarda una vez y vuelve sola en cada vencimiento.</p>
       <form class="panel" id="fBill" novalidate>
         <label>Nombre<input id="bName" maxlength="60" placeholder="Luz"><small class="err" id="eName" role="alert" hidden></small></label>
         <div class="row">
           <label>Importe (€)<input id="bAmount" type="number" inputmode="decimal" min="0.01" step="0.01" placeholder="72,40"><small class="err" id="eAmount" role="alert" hidden></small></label>
-          <label>Frecuencia<select id="bFreq">${Object.entries(FREQ).map(([k,v]) => `<option value="${k}" ${k==='monthly'?'selected':''}>${v}</option>`).join('')}</select></label>
+          <label>Se repite<select id="bFreq">${Object.entries(FREQ).map(([k,v]) => `<option value="${k}" ${k==='monthly'?'selected':''}>${v}</option>`).join('')}</select></label>
         </div>
         <div class="row">
           <label>Fecha de vencimiento<input id="bDate" type="date"><small class="err" id="eDate" role="alert" hidden></small></label>
@@ -633,6 +761,19 @@ async function renderFacturas(){
         <button class="btn" type="submit">Dar de alta</button>
       </form>
     </section>`;
+
+  app.querySelectorAll('[data-pay]').forEach(btn => btn.onclick = async () => {
+    try{
+      if (btn.dataset.on === 'true') await S.api.unpayShare(btn.dataset.pay, btn.dataset.due);
+      else { await S.api.payShare(S.apt.id, btn.dataset.pay, btn.dataset.due); toast('Tu parte queda marcada como pagada.'); }
+      await renderFacturas();
+    }catch(err){ toast(friendly(err)); }
+  });
+  app.querySelectorAll('[data-next]').forEach(btn => btn.onclick = async () => {
+    try{ await S.api.advanceBill(btn.dataset.next); toast('Factura pasada al siguiente vencimiento.'); await renderFacturas(); }
+    catch(err){ toast(friendly(err)); }
+  });
+
   ['bName','bAmount','bDate'].forEach(id => $('#'+id).addEventListener('input', () => clearFieldError(id)));
   $('#fBill').onsubmit = e => run(e, async () => {
     ['bName','bAmount','bDate'].forEach(clearFieldError);
