@@ -568,11 +568,7 @@ async function start(){
   if (cod){
     safeStorage.removeItem('teo_codigo');
     if (!S.apt){
-      S.codigoInvitacion = cod;
-      if (S.me){ // ya sabemos tu nombre: te unimos directamente
-        try{ await S.api.joinApartment(cod); await refreshApt(); S.tab = 'piso'; S.codigoInvitacion = ''; toast('Te has unido al piso.'); }
-        catch(e){ toast(friendly(e)); }
-      }
+      S.codigoInvitacion = cod; // no te unimos sin preguntar: se muestra una confirmación
     } else if (S.apt.invite_code !== cod) toast('Ya estás en un piso. Sal de él en Mi perfil para unirte a otro.');
   }
   render();
@@ -838,7 +834,27 @@ async function renderPerfil(){
 }
 
 /* Sin piso: nombre + crear o unirse (TEO-8) */
+function renderInvitacion(){
+  const cod = S.codigoInvitacion;
+  const tiles = cod.split('').map((c,i) => `<span class="tile mag m${(i%6)+1}">${esc(c)}</span>`).join('');
+  app.innerHTML = `${header('Invitación a un piso')}
+    <section class="sec">
+      <h2>¿Quieres unirte a este piso?</h2>
+      <p class="sub">Te han invitado con este código. Si entras, verás las compras, la limpieza y las facturas del piso, y tus compañeros verán tu nombre y tu foto.</p>
+      <div class="tiles" aria-label="Código ${esc(cod.split('').join(' '))}">${tiles}</div>
+      <div class="stack" style="margin-top:14px">
+        <button class="btn" id="invYes">Sí, unirme al piso</button>
+        <button class="btn ghost" id="invNo">No, gracias</button>
+      </div>
+    </section>`;
+  $('#invNo').onclick = () => { S.codigoInvitacion = ''; renderOnboarding(); };
+  $('#invYes').onclick = e => run(e, async () => {
+    await S.api.joinApartment(cod);
+    await refreshApt(); S.tab = 'piso'; S.codigoInvitacion = ''; toast('Te has unido al piso.'); render();
+  });
+}
 function renderOnboarding(){
+  if (S.codigoInvitacion && S.me) return renderInvitacion();
   app.innerHTML = `${header('Tu piso, en orden')}
     ${S.codigoInvitacion ? `<div class="notice"><b>Te han invitado a un piso.</b> ${S.me ? 'Pulsa «Unirme al piso» para entrar.' : 'Escribe tu nombre y pulsa «Unirme al piso».'}</div>` : ''}
     <section class="sec">
