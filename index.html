@@ -647,18 +647,15 @@ function editorPerfilHtml(){
   const foto = !!S.api.setAvatar;
   return `<section class="sec">
     <h2>Mi nombre y foto</h2>
-    <p class="sub">Es lo que verán tus compañeros en el piso.${S.anon ? '' : ' No cambia tu cuenta de Google.'}</p>
+    <p class="sub">Es lo que verán tus compañeros en el piso. No cambia tu cuenta de Google.</p>
     ${foto ? `<div class="perfil-head" style="margin:10px 0 14px">
       <span class="avatar big">${avatarInner()}</span>
-      <span class="stack" style="gap:8px">
-        <button class="btn ghost small" type="button" id="fotoBtn">Subir foto</button>
-        ${!S.anon && S.avatar && S.myAvatar !== S.avatar ? '<button class="link" type="button" id="fotoGoogle">Usar la de Google</button>' : ''}
-      </span>
+      <button class="btn ghost small" type="button" id="fotoBtn">Subir foto</button>
       <input id="fotoFile" type="file" accept="image/*" hidden>
     </div>` : ''}
     <form class="row" id="fName" style="margin-top:10px">
       <input id="newName" maxlength="40" value="${esc(S.me)}" aria-label="Tu nombre" required>
-      <button class="btn" type="submit">Guardar</button>
+      <button class="btn" type="submit">Cambiar nombre</button>
     </form>
   </section>`;
 }
@@ -691,7 +688,42 @@ function bindEditorPerfil(rerender){
     const file = f.files[0]; if (!file) return;
     try{ await guardar(await reducirFoto(file)); }catch(err){ toast(friendly(err)); }
   };
-  const g = $('#fotoGoogle'); if (g) g.onclick = () => guardar(S.avatar);
+}
+
+/* Salir del piso actual (antes en la pestaña Piso) */
+function salirPisoHtml(apt){
+  return `<section class="sec">
+      <h2>Salir de ${esc(apt.name)}</h2>
+      <p class="sub">Dejarás de ver sus datos. Podrás volver a entrar con el código.</p>
+      <button class="btn danger" id="leave">Salir del piso</button>
+      <div class="confirm" id="leaveConfirm" hidden>
+        <p id="leaveMsg" style="margin:0 0 10px;font-size:15px">Comprobando tus cuentas…</p>
+        <div class="row"><button class="btn danger small" id="leaveYes" hidden>Sí, salir</button><button class="btn ghost small" id="leaveNo">Cancelar</button></div>
+      </div>
+    </section>`;
+}
+function bindSalirPiso(apt){
+  $('#leave').onclick = async () => {
+    $('#leaveConfirm').hidden = false; $('#leave').hidden = true;
+    let bal = 0, known = true;
+    try{ bal = await S.api.myBalance(apt.id); }catch{ known = false; }
+    const m = $('#leaveMsg'); if (!m) return;
+    if (!known){
+      m.innerHTML = `<b>No he podido comprobar tus cuentas.</b> Puede que tengas saldos pendientes en “${esc(apt.name)}”. Al salir dejarás de ver sus datos.`;
+    } else if (Math.abs(bal) >= 0.01){
+      m.innerHTML = bal < 0
+        ? `<b>Tienes cuentas pendientes.</b> Debes ${eur(-bal)} a tus compañeros. Si sales ahora, dejarás de ver los gastos del piso y esa deuda seguirá ahí.`
+        : `<b>Tienes cuentas pendientes.</b> Tus compañeros te deben ${eur(bal)}. Si sales ahora, dejarás de ver los gastos del piso y puede que no lo recuperes.`;
+    } else {
+      m.innerHTML = `<b>Tus cuentas están saldadas.</b> Saldrás de “${esc(apt.name)}” y dejarás de ver sus datos.`;
+    }
+    const yes = $('#leaveYes'); if (yes) yes.hidden = false;
+  };
+  $('#leaveNo').onclick = () => { $('#leaveConfirm').hidden = true; $('#leave').hidden = false; };
+  $('#leaveYes').onclick = async () => {
+    try{ await S.api.leave(apt.id); await refreshApt(); S.tab = 'piso'; toast('Has salido del piso.'); render(); }
+    catch(err){ toast(friendly(err)); }
+  };
 }
 
 /* Mi perfil: la cuenta de Google y todos mis pisos, con su código y su información */
@@ -729,13 +761,17 @@ async function renderPerfil(){
   app.innerHTML = `${header('Mi perfil')}
     <section class="sec perfil-head">
       <span class="avatar big">${avatarInner()}</span>
-      <span class="grow"><span class="name">${esc(nombreVisible())}</span><br><span class="small dim">Cuenta de Google: ${esc(S.email)}</span></span>
+      <span class="grow"><span class="name">${esc(nombreVisible())}</span><br><span class="small dim">Cuenta de Google: ${esc(S.email)}</span>
+        <br><button class="link" id="editPerfil" aria-expanded="${!!S.editPerfil}">${S.editPerfil ? 'Cerrar' : 'Cambiar foto y nombre de usuario'}</button></span>
     </section>
-    ${editorPerfilHtml()}
+    ${S.editPerfil ? editorPerfilHtml() : ''}
     <div class="sec-head" style="margin:18px 2px 0"><h2>Mis pisos</h2><span class="count">${info.length}</span></div>
     ${info.length ? info.map(card).join('') : `<section class="sec"><p class="sub" style="margin:0">Todavía no estás en ningún piso.</p><button class="btn" data-go="piso" style="margin-top:12px">Crear o unirme a un piso</button></section>`}
+    ${S.apt ? salirPisoHtml(S.apt) : ''}
     <section class="sec"><button class="btn danger" data-logout style="width:100%">Cerrar sesión</button></section>`;
-  bindEditorPerfil(renderPerfil);
+  $('#editPerfil').onclick = () => { S.editPerfil = !S.editPerfil; renderPerfil(); };
+  if (S.editPerfil) bindEditorPerfil(renderPerfil);
+  if (S.apt) bindSalirPiso(S.apt);
   app.querySelectorAll('[data-copy]').forEach(b => b.onclick = async () => {
     try{ await navigator.clipboard.writeText(b.dataset.copy); toast('Código copiado.'); }
     catch{ toast('Copia el código a mano: ' + b.dataset.copy); }
@@ -811,16 +847,6 @@ async function renderPiso(){
         <li><span class="mag-dot mag ${mc(m.id)}">${dotInner(m)}</span>
           <span class="grow name">${esc(m.name)}</span>
           ${m.id===S.api.uid ? '<span class="you">Tú</span>' : ''}</li>`).join('')}</ul>
-    </section>
-    ${editorPerfilHtml()}
-    <section class="sec">
-      <h2>Salir del piso</h2>
-      <p class="sub">Dejarás de ver sus datos. Podrás volver a entrar con el código.</p>
-      <button class="btn danger" id="leave">Salir del piso</button>
-      <div class="confirm" id="leaveConfirm" hidden>
-        <p id="leaveMsg" style="margin:0 0 10px;font-size:15px">Comprobando tus cuentas…</p>
-        <div class="row"><button class="btn danger small" id="leaveYes" hidden>Sí, salir</button><button class="btn ghost small" id="leaveNo">Cancelar</button></div>
-      </div>
     </section>`;
   app.querySelectorAll('[data-turno]').forEach(b => b.onclick = async () => {
     b.disabled = true;
@@ -829,28 +855,6 @@ async function renderPiso(){
   $('#copyCode').onclick = async () => {
     try{ await navigator.clipboard.writeText(apt.invite_code); toast('Código copiado.'); }
     catch{ toast('Copia el código a mano: ' + apt.invite_code); }
-  };
-  bindEditorPerfil(renderPiso);
-  $('#leave').onclick = async () => {
-    $('#leaveConfirm').hidden = false; $('#leave').hidden = true;
-    let bal = 0, known = true;
-    try{ bal = await S.api.myBalance(apt.id); }catch{ known = false; }
-    const m = $('#leaveMsg'); if (!m) return;
-    if (!known){
-      m.innerHTML = `<b>No he podido comprobar tus cuentas.</b> Puede que tengas saldos pendientes en “${esc(apt.name)}”. Al salir dejarás de ver sus datos.`;
-    } else if (Math.abs(bal) >= 0.01){
-      m.innerHTML = bal < 0
-        ? `<b>Tienes cuentas pendientes.</b> Debes ${eur(-bal)} a tus compañeros. Si sales ahora, dejarás de ver los gastos del piso y esa deuda seguirá ahí.`
-        : `<b>Tienes cuentas pendientes.</b> Tus compañeros te deben ${eur(bal)}. Si sales ahora, dejarás de ver los gastos del piso y puede que no lo recuperes.`;
-    } else {
-      m.innerHTML = `<b>Tus cuentas están saldadas.</b> Saldrás de “${esc(apt.name)}” y dejarás de ver sus datos.`;
-    }
-    const yes = $('#leaveYes'); if (yes) yes.hidden = false;
-  };
-  $('#leaveNo').onclick = () => { $('#leaveConfirm').hidden = true; $('#leave').hidden = false; };
-  $('#leaveYes').onclick = async () => {
-    try{ await S.api.leave(apt.id); await refreshApt(); toast('Has salido del piso.'); render(); }
-    catch(err){ toast(friendly(err)); }
   };
 }
 
