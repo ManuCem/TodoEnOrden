@@ -741,64 +741,69 @@ function bindEditorPerfil(rerender){
   };
 }
 
-/* Salir del piso actual (antes en la pestaña Piso) */
-function salirPisoHtml(apt){
+/* Ajustes del piso: salir y eliminar, con avisos según tu situación */
+function ajustesPisoHtml(apt){
   const otros = S.members.filter(m => m.id !== S.api.uid);
   const admin = esAdmin(apt);
-  const elegir = admin && apt.owner_id && otros.length ? `<label style="margin:0 0 10px">Eres el admin de este piso. Elige quién será el nuevo admin:
-          <select id="newOwner"><option value="">Elige a una persona…</option>${otros.map(m => `<option value="${esc(m.id)}">${esc(m.name)}</option>`).join('')}</select></label>` : '';
-  const quien = S.members.find(m => m.id === apt.owner_id);
+  const elegir = admin && apt.owner_id && otros.length
+    ? `<label style="margin:0 0 10px">Nuevo admin
+        <select id="newOwner"><option value="">Elige a una persona…</option>${otros.map(m => `<option value="${esc(m.id)}">${esc(m.name)}</option>`).join('')}</select></label>` : '';
   return `<section class="sec">
-      <h2>Salir de ${esc(apt.name)}</h2>
-      <p class="sub">Dejarás de ver sus datos. Podrás volver a entrar con el código. ${admin && apt.owner_id ? 'Como eres el admin, tendrás que elegir a otra persona como admin. ' : ''}Si eres la última persona del piso, el piso se elimina.</p>
+    <h2>Ajustes del piso</h2>
+    <div class="stack" style="margin-top:12px">
       <button class="btn danger" id="leave">Salir del piso</button>
       <div class="confirm" id="leaveConfirm" hidden>
         <p id="leaveMsg" style="margin:0 0 10px;font-size:15px">Comprobando tus cuentas…</p>
         ${elegir}
         <div class="row"><button class="btn danger small" id="leaveYes" hidden>Sí, salir</button><button class="btn ghost small" id="leaveNo">Cancelar</button></div>
       </div>
-    </section>
-    ${admin ? `<section class="sec">
-      <h2>Eliminar el piso para todos</h2>
-      <p class="sub">Solo el admin puede hacerlo. Se borra “${esc(apt.name)}” con su compra, limpieza y facturas, y todos tus compañeros lo pierden. No se puede deshacer.</p>
-      <button class="btn danger" id="delApt">Eliminar el piso para todos</button>
+      ${admin ? `<button class="btn danger" id="delApt">Eliminar el piso para todos</button>
       <div class="confirm" id="delAptConfirm" hidden>
-        <p style="margin:0 0 10px;font-size:15px"><b>Escribe el nombre del piso para confirmar:</b> ${esc(apt.name)}</p>
-        <input id="delAptName" autocomplete="off" aria-label="Nombre del piso" placeholder="${esc(apt.name)}" style="margin-bottom:10px">
+        <p style="margin:0 0 10px;font-size:15px"><b>Vas a eliminar “${esc(apt.name)}” para todos.</b> Se borrará todo (compra, limpieza y facturas) y tus compañeros lo perderán. <b>No se puede deshacer.</b></p>
+        <label style="margin-bottom:10px">Escribe el nombre del piso para confirmar
+          <input id="delAptName" autocomplete="off" placeholder="${esc(apt.name)}"></label>
         <div class="row"><button class="btn danger small" id="delAptYes" disabled>Sí, eliminar el piso</button><button class="btn ghost small" id="delAptNo">Cancelar</button></div>
-      </div>
-    </section>` : `<section class="sec">
-      <h2>Admin del piso</h2>
-      <p class="sub" style="margin:0">Solo ${quien ? '<b>' + esc(quien.name) + '</b>' : 'el admin'}, que creó el piso, puede eliminarlo para todos.</p>
-    </section>`}`;
+      </div>` : ''}
+    </div>
+  </section>`;
 }
-function bindSalirPiso(apt){
+function bindAjustesPiso(apt){
+  const otros = S.members.filter(m => m.id !== S.api.uid);
+  const admin = esAdmin(apt) && !!apt.owner_id;
+  const cierra = () => { $('#leaveConfirm').hidden = true; $('#leave').hidden = false;
+    if ($('#delApt')){ $('#delAptConfirm').hidden = true; $('#delApt').hidden = false; $('#delAptName').value = ''; $('#delAptYes').disabled = true; } };
   $('#leave').onclick = async () => {
-    $('#leaveConfirm').hidden = false; $('#leave').hidden = true;
+    cierra();
+    $('#leaveConfirm').hidden = false; $('#leave').hidden = true; $('#leaveYes').hidden = true;
+    const m = $('#leaveMsg'); m.textContent = 'Comprobando tus cuentas…';
     let bal = 0, known = true;
-    try{ bal = await S.api.myBalance(apt.id); }catch{ known = false; }
-    const m = $('#leaveMsg'); if (!m) return;
-    if (!known){
-      m.innerHTML = `<b>No he podido comprobar tus cuentas.</b> Puede que tengas saldos pendientes en “${esc(apt.name)}”. Al salir dejarás de ver sus datos.`;
-    } else if (Math.abs(bal) >= 0.01){
-      m.innerHTML = bal < 0
-        ? `<b>Tienes cuentas pendientes.</b> Debes ${eur(-bal)} a tus compañeros. Si sales ahora, dejarás de ver los gastos del piso y esa deuda seguirá ahí.`
-        : `<b>Tienes cuentas pendientes.</b> Tus compañeros te deben ${eur(bal)}. Si sales ahora, dejarás de ver los gastos del piso y puede que no lo recuperes.`;
-    } else {
-      m.innerHTML = `<b>Tus cuentas están saldadas.</b> Saldrás de “${esc(apt.name)}” y dejarás de ver sus datos.`;
+    if (otros.length){ try{ bal = await S.api.myBalance(apt.id); }catch{ known = false; } }
+    if (!m.isConnected) return;
+    let msg = !otros.length
+      ? `<b>Eres la única persona del piso.</b> Si sales, “${esc(apt.name)}” se eliminará con todos sus datos.`
+      : admin
+        ? `<b>Eres el admin del piso.</b> Elige a otra persona como admin para poder salir. Podrás volver a entrar con el código cuando quieras.`
+        : `<b>Saldrás de “${esc(apt.name)}”.</b> Podrás volver a entrar con el código cuando quieras.`;
+    if (otros.length){
+      if (!known) msg += ' <b>No he podido comprobar tus cuentas:</b> puede que tengas saldos pendientes.';
+      else if (bal <= -0.01) msg += ` <b>Ojo:</b> debes ${eur(-bal)} a tus compañeros y esa deuda seguirá ahí.`;
+      else if (bal >= 0.01) msg += ` <b>Ojo:</b> tus compañeros te deben ${eur(bal)}.`;
     }
-    const yes = $('#leaveYes'); if (yes) yes.hidden = false;
+    m.innerHTML = msg;
+    $('#leaveYes').textContent = otros.length ? 'Sí, salir' : 'Sí, salir y eliminar el piso';
+    $('#leaveYes').hidden = false;
   };
-  $('#leaveNo').onclick = () => { $('#leaveConfirm').hidden = true; $('#leave').hidden = false; };
+  $('#leaveNo').onclick = cierra;
   $('#leaveYes').onclick = async () => {
     const sel = $('#newOwner');
     if (sel && !sel.value){ toast('Elige quién será el nuevo admin antes de salir.'); return; }
-    try{ await S.api.leave(apt.id, sel ? sel.value : null); await refreshApt(); S.tab = 'piso'; toast('Has salido del piso.'); render(); }
-    catch(err){ toast(friendly(err)); }
+    $('#leaveYes').disabled = true;
+    try{ await S.api.leave(apt.id, sel ? sel.value : null); await refreshApt(); S.tab = 'piso'; toast(otros.length ? 'Has salido del piso.' : 'Has salido y el piso se ha eliminado.'); render(); }
+    catch(err){ $('#leaveYes').disabled = false; toast(friendly(err)); }
   };
   if (!$('#delApt')) return;
-  $('#delApt').onclick = () => { $('#delAptConfirm').hidden = false; $('#delApt').hidden = true; $('#delAptName').focus(); };
-  $('#delAptNo').onclick = () => { $('#delAptConfirm').hidden = true; $('#delApt').hidden = false; $('#delAptName').value = ''; $('#delAptYes').disabled = true; };
+  $('#delApt').onclick = () => { cierra(); $('#delAptConfirm').hidden = false; $('#delApt').hidden = true; $('#delAptName').focus(); };
+  $('#delAptNo').onclick = cierra;
   $('#delAptName').oninput = () => { $('#delAptYes').disabled = $('#delAptName').value.trim().toLowerCase() !== apt.name.trim().toLowerCase(); };
   $('#delAptYes').onclick = async () => {
     $('#delAptYes').disabled = true;
@@ -839,6 +844,10 @@ async function renderPerfil(){
       ${actual ? '' : `<button class="btn ghost" data-open="${esc(a.id)}" style="margin-top:12px;width:100%">Abrir este piso</button>`}
     </section>`;
   };
+  const pasan = info.filter(x => x.a.owner_id && x.a.owner_id === S.api.uid && x.mem.length > 1).map(x => esc(x.a.name));
+  const solos = info.filter(x => x.mem.length <= 1).map(x => esc(x.a.name));
+  const avisoCuenta = (pasan.length ? ` Eres admin de ${pasan.join(', ')}: el admin pasará a otra persona al azar.` : '')
+    + (solos.length ? ` Estás solo en ${solos.join(', ')}: ${solos.length > 1 ? 'esos pisos se eliminarán' : 'ese piso se eliminará'}.` : '');
   app.innerHTML = `${header('Mi perfil')}
     <section class="sec perfil-head">
       <span class="avatar big">${avatarInner()}</span>
@@ -848,20 +857,18 @@ async function renderPerfil(){
     ${S.editPerfil ? editorPerfilHtml() : ''}
     <div class="sec-head" style="margin:18px 2px 0"><h2>Mis pisos</h2><span class="count">${info.length}</span></div>
     ${info.length ? info.map(card).join('') : `<section class="sec"><p class="sub" style="margin:0">Todavía no estás en ningún piso.</p><button class="btn" data-go="piso" style="margin-top:12px">Crear o unirme a un piso</button></section>`}
-    ${S.apt ? salirPisoHtml(S.apt) : ''}
     <section class="sec">
       <h2>Eliminar mi cuenta</h2>
-      <p class="sub">Se borra tu cuenta y tus datos personales, y saldrás de tus pisos. Si eres admin de un piso con más gente, se elige otro admin al azar; si estás solo, el piso se elimina. No se puede deshacer.</p>
+      <p class="sub">Se borra tu cuenta y saldrás de tus pisos.</p>
       <button class="btn danger" id="delAcc">Eliminar mi cuenta</button>
       <div class="confirm" id="delConfirm" hidden>
-        <p style="margin:0 0 10px;font-size:15px"><b>¿Seguro?</b> Perderás tu acceso a los pisos y tus tareas, pagos y fotos de perfil se borrarán.</p>
+        <p style="margin:0 0 10px;font-size:15px"><b>¿Seguro?</b> Tu cuenta, tu foto y tus datos se borrarán y no se puede deshacer.${avisoCuenta}</p>
         <div class="row"><button class="btn danger small" id="delYes">Sí, eliminar</button><button class="btn ghost small" id="delNo">Cancelar</button></div>
       </div>
     </section>
     <section class="sec"><button class="btn danger" data-logout style="width:100%">Cerrar sesión</button></section>`;
   $('#editPerfil').onclick = () => { S.editPerfil = !S.editPerfil; renderPerfil(); };
   if (S.editPerfil) bindEditorPerfil(renderPerfil);
-  if (S.apt) bindSalirPiso(S.apt);
   $('#delAcc').onclick = () => { $('#delConfirm').hidden = false; $('#delAcc').hidden = true; };
   $('#delNo').onclick = () => { $('#delConfirm').hidden = true; $('#delAcc').hidden = false; };
   $('#delYes').onclick = async () => {
@@ -978,7 +985,9 @@ async function renderPiso(){
           <span class="grow name">${esc(m.name)}</span>
           ${apt.owner_id && m.id === apt.owner_id ? '<span class="you">Admin</span>' : ''}
           ${m.id===S.api.uid ? '<span class="you">Tú</span>' : ''}</li>`).join('')}</ul>
-    </section>`;
+    </section>
+    ${ajustesPisoHtml(apt)}`;
+  bindAjustesPiso(apt);
   app.querySelectorAll('[data-turno]').forEach(b => b.onclick = async () => {
     b.disabled = true;
     try{ await S.api.setDone(b.dataset.turno, true); await renderPiso(); toast('Tarea marcada como hecha.'); }catch(err){ b.disabled = false; toast(friendly(err)); }
