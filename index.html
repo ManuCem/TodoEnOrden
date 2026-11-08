@@ -97,6 +97,19 @@ button{cursor:pointer}
 .status.demo i{background:var(--m2)}
 .top h1{padding-left:14px;border-left:6px solid var(--accent)}
 
+/* cuenta de Google: avatar y menu */
+.meta{position:relative}
+.avatar{width:34px;height:34px;padding:0;border-radius:50%;border:2px solid var(--accent);background:var(--accent-soft);
+  color:var(--ink);font-weight:800;display:inline-flex;align-items:center;justify-content:center;overflow:hidden;box-shadow:var(--shadow)}
+.avatar img{width:100%;height:100%;object-fit:cover;display:block}
+.menu{position:absolute;right:0;top:calc(100% - 4px);z-index:20;min-width:220px;background:var(--paper);border:1px solid var(--line);
+  border-radius:14px;box-shadow:var(--shadow);padding:6px}
+.menu .who{display:flex;flex-direction:column;gap:2px;padding:10px 12px 12px;border-bottom:1px solid var(--line);margin-bottom:4px}
+.menu .who b{font-size:16px}
+.menu .who small{color:var(--muted);font-weight:500;overflow-wrap:anywhere}
+.menu button{display:block;width:100%;text-align:left;background:none;border:0;border-radius:10px;padding:10px 12px;font-weight:700}
+.menu button:hover{background:var(--accent-soft)}
+
 /* selector de pisos de ejemplo */
 .pisos{display:flex;gap:8px;overflow-x:auto;padding:12px 2px 4px;margin:0 -2px;scrollbar-width:none}
 .pisos::-webkit-scrollbar{display:none}
@@ -503,11 +516,11 @@ function header(title){
       <span class="status ${demo?'demo':''}"><i></i>${demo?'Datos de ejemplo':'Conectado'}</span>
       ${S.api.kind === 'supabase' ? (S.anon
         ? `<button class="status" data-google aria-label="Iniciar sesión con Google" style="font-weight:800">${GOOGLE_G}Iniciar sesión</button>`
-        : `<span class="status" title="${esc(S.nombreG || '')}" style="padding:2px;width:32px;height:32px;justify-content:center;overflow:hidden;font-weight:800">${
-            S.avatar ? `<img src="${esc(S.avatar)}" alt="${esc(S.nombreG || 'Cuenta')}" referrerpolicy="no-referrer" style="width:28px;height:28px;border-radius:50%" onerror="this.replaceWith(document.createTextNode('${esc((S.nombreG || '?').charAt(0).toUpperCase())}'))">`
-            : esc((S.nombreG || '?').charAt(0).toUpperCase())}</span>`) : ''}
+        : `<button class="avatar" data-account aria-label="Menú de cuenta" aria-haspopup="true" aria-expanded="false">${avatarInner()}</button>`) : ''}
       <button class="status" data-go="ayuda" aria-label="Cómo funciona la app" style="font-weight:900">?</button>
-    </span></div>
+    </span>${S.api.kind === 'supabase' && !S.anon ? `<div class="menu" id="userMenu" hidden>
+      <div class="who"><b>${esc(S.nombreG || 'Mi cuenta')}</b>${S.email ? `<small>${esc(S.email)}</small>` : ''}</div>
+      <button data-logout>↩ Cerrar sesión</button></div>` : ''}</div>
     <h1>${esc(title)}</h1>${pisos}${bannerHtml()}</header>`;
 }
 function dueWords(d){
@@ -523,6 +536,10 @@ function bannerHtml(){
   const lines = urgent.slice(0,3).map(b => `${esc(b.name)} ${dueWords(daysUntil(b.next_due_date))}`).join('. ');
   return `<button class="alert" data-go="facturas"><b>${urgent.length===1?'Una factura vence pronto':urgent.length+' facturas vencen pronto'}</b>${lines}.</button>`;
 }
+function avatarInner(){
+  const ini = esc((S.nombreG || '?').charAt(0).toUpperCase());
+  return S.avatar ? `<img src="${esc(S.avatar)}" alt="" referrerpolicy="no-referrer" onerror="this.replaceWith(document.createTextNode('${ini}'))">` : ini;
+}
 const GOOGLE_G = '<svg width="16" height="16" viewBox="0 0 48 48" aria-hidden="true"><path fill="#EA4335" d="M24 9.5c3.5 0 6.6 1.2 9.1 3.6l6.8-6.8C35.8 2.4 30.3 0 24 0 14.6 0 6.5 5.4 2.6 13.2l7.9 6.1C12.4 13.6 17.7 9.5 24 9.5z"/><path fill="#4285F4" d="M46.5 24.5c0-1.6-.1-3.1-.4-4.5H24v9h12.7c-.6 3-2.2 5.5-4.7 7.2l7.6 5.9c4.4-4.1 6.9-10.1 6.9-17.6z"/><path fill="#FBBC05" d="M10.5 28.7A14.5 14.5 0 0 1 9.5 24c0-1.6.3-3.2.8-4.7l-7.9-6.1A24 24 0 0 0 0 24c0 3.9.9 7.5 2.6 10.8l7.9-6.1z"/><path fill="#34A853" d="M24 48c6.5 0 11.9-2.1 15.9-5.8l-7.6-5.9c-2.1 1.4-4.9 2.3-8.3 2.3-6.3 0-11.6-4.1-13.5-9.8l-7.9 6.1C6.5 42.6 14.6 48 24 48z"/></svg>';
 async function googleLogin(){
   const redirectTo = location.origin + location.pathname;
@@ -531,10 +548,15 @@ async function googleLogin(){
   if (error) ({ error } = await S.sb.auth.signInWithOAuth({ provider:'google', options:{ redirectTo } }));
   if (error) alert('No se pudo iniciar sesión con Google: ' + error.message);
 }
+document.addEventListener('click', e => { const m = $('#userMenu'); if (m && !m.hidden && !e.target.closest('#userMenu,[data-account]')) m.hidden = true; });
+document.addEventListener('keydown', e => { const m = $('#userMenu'); if (e.key === 'Escape' && m) m.hidden = true; });
 app.addEventListener('click', async e => {
   const p = e.target.closest('[data-piso]');
   if (p){ if (p.dataset.piso === S.api.piso) return; S.api = demoApi(p.dataset.piso); S.editItem = null; await start(); window.scrollTo(0,0); return; }
   if (e.target.closest('[data-google]')){ googleLogin(); return; }
+  const acc = e.target.closest('[data-account]');
+  if (acc){ const m = $('#userMenu'); m.hidden = !m.hidden; acc.setAttribute('aria-expanded', String(!m.hidden)); return; }
+  if (e.target.closest('[data-logout]')){ await S.sb.auth.signOut(); S.tab = 'piso'; await boot(false); return; }
   const g = e.target.closest('[data-go]'); if (!g) return;
   S.tab = g.dataset.go; S.editItem = null; render(); window.scrollTo(0,0);
 });
