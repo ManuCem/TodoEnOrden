@@ -167,8 +167,6 @@ input.invalid,select.invalid{border-color:var(--bad)}
 .tiles{display:flex;gap:7px;margin:10px 0;justify-content:center}
 .tile{flex:1;max-width:56px;aspect-ratio:3/4;display:grid;place-items:center;border-radius:8px;
   font-weight:900;font-stretch:125%;font-size:30px;line-height:1;box-shadow:0 3px 0 rgba(0,0,0,.25), inset 0 2px 0 rgba(255,255,255,.35)}
-.tile:nth-child(odd){transform:rotate(-3deg)}
-.tile:nth-child(even){transform:rotate(2.2deg) translateY(3px)}
 
 /* listas */
 .list{list-style:none;margin:0;padding:0}
@@ -255,7 +253,108 @@ input.invalid,select.invalid{border-color:var(--bad)}
   max-width:min(440px,calc(100vw - 32px));background:var(--ink);color:var(--paper);padding:12px 16px;border-radius:12px;font-size:15px;font-weight:700}
 .loading{display:grid;place-items:center;min-height:50vh;color:var(--muted)}
 .confirm{border:2px solid var(--bad);border-radius:12px;padding:12px;margin-top:10px;background:var(--paper)}
-@media (prefers-reduced-motion:reduce){ *{transition:none!important} }
+/* ================= Animaciones ================= */
+:root{--spring:cubic-bezier(.34,1.56,.64,1);--out:cubic-bezier(.22,1,.36,1)}
+@keyframes rise{from{opacity:0;transform:translateY(18px) scale(.985)}}
+@keyframes slideIn{from{opacity:0;transform:translateX(-14px)}}
+@keyframes drop{from{opacity:0;transform:translateY(-28px) rotate(calc(var(--rot) - 28deg)) scale(.55)}}
+@keyframes growY{from{transform:scaleY(0);opacity:0}}
+@keyframes growX{from{transform:scaleX(0)}}
+@keyframes pop{from{opacity:0;transform:scale(.4)}}
+@keyframes ping{0%{transform:scale(1);opacity:.55}80%,100%{transform:scale(2.8);opacity:0}}
+@keyframes glow{0%,100%{box-shadow:var(--shadow)}50%{box-shadow:var(--shadow),0 0 0 5px color-mix(in srgb,var(--m2) 28%,transparent)}}
+@keyframes menuIn{from{opacity:0;transform:translateY(-10px) scale(.9)}}
+@keyframes toastIn{from{opacity:0;transform:translate(-50%,18px) scale(.94)}}
+@keyframes breathe{0%,100%{opacity:.45}50%{opacity:1}}
+@keyframes ripple{from{transform:scale(0);opacity:.3}to{transform:scale(1);opacity:0}}
+
+/* base: todo lo interactivo se mueve con un muelle suave */
+.btn,.nav button,.pisos button,.status,.avatar,.chip,.state,.count,.you,.check,.x,.tile,.mag-dot,.logo,.link,.menu button,.alert,.turno,.sec{
+  transition:transform .4s var(--spring),box-shadow .3s var(--out),background-color .25s,color .25s,border-color .25s,opacity .25s}
+.btn,.nav button,.pisos button{position:relative;overflow:hidden;isolation:isolate}
+.btn::after{content:"";position:absolute;top:0;bottom:0;left:-70%;width:45%;transform:skewX(-20deg);pointer-events:none;
+  background:linear-gradient(100deg,transparent,color-mix(in srgb,currentColor 24%,transparent),transparent);transition:left .7s var(--out)}
+.ripple{position:absolute;border-radius:50%;pointer-events:none;background:currentColor;animation:ripple .65s var(--out) forwards;z-index:0}
+
+/* indicador de conexion: pulso */
+.status i{position:relative}
+.status i::after{content:"";position:absolute;inset:0;border-radius:50%;background:inherit;animation:ping 2.2s var(--out) infinite}
+.alert{animation:glow 3s ease-in-out infinite}
+.loading{animation:breathe 1.6s ease-in-out infinite}
+
+/* listas: barrido de color al pasar el cursor */
+.list li{background-image:linear-gradient(90deg,var(--accent-soft),transparent 85%);background-repeat:no-repeat;background-size:0% 100%;
+  transition:background-size .5s var(--out)}
+.list li.empty{background-image:none}
+
+/* avisos y menus que aparecen */
+.menu{transform-origin:top right;animation:menuIn .26s var(--spring)}
+.menu button:hover{box-shadow:inset 3px 0 0 var(--accent);transform:translateX(3px)}
+.confirm:not([hidden]){animation:rise .35s var(--spring)}
+.toast:not([hidden]){animation:toastIn .4s var(--spring)}
+
+/* letras de nevera: caen, se enderezan al tocarlas y arrastran a las vecinas */
+.tile{--rot:-3deg;--ty:0px;transform:translateY(var(--ty)) rotate(var(--rot))}
+.tile:nth-child(odd){--rot:-3deg;--ty:0px}
+.tile:nth-child(even){--rot:2.2deg;--ty:3px}
+
+/* pulsar: efecto de hundirse */
+.btn:not(:disabled):active,.pisos button:active{transform:translateY(1px) scale(.97);box-shadow:0 0 0 rgba(0,0,0,0)}
+.nav button:active{transform:scale(.93)}
+.check:not(:disabled):active{transform:scale(.82)}
+.avatar:active,.status:active{transform:scale(.92)}
+
+@media (hover:hover){
+  .btn:not(:disabled):hover{transform:translateY(-3px);box-shadow:0 5px 0 rgba(22,36,58,.14),0 14px 22px -12px color-mix(in srgb,var(--accent) 70%,transparent)}
+  .btn.danger:not(:disabled):hover{box-shadow:0 5px 0 rgba(22,36,58,.1),0 14px 22px -12px color-mix(in srgb,var(--bad) 70%,transparent)}
+  .btn:not(:disabled):hover::after{left:130%}
+  .nav button:hover{transform:translateY(-3px)}
+  .pisos button:hover{transform:translateY(-3px) scale(1.04)}
+  .status:hover{transform:translateY(-2px);box-shadow:var(--shadow),0 0 0 3px color-mix(in srgb,var(--accent) 22%,transparent)}
+  .avatar:hover{transform:scale(1.14) rotate(-5deg);box-shadow:var(--shadow),0 0 0 4px color-mix(in srgb,var(--accent) 30%,transparent)}
+  .logo:hover{transform:rotate(-7deg) scale(1.1)}
+  .link:hover{transform:translateX(3px)}
+  .chip:hover,.state:hover,.count:hover,.you:hover{transform:scale(1.1)}
+  .check:not(:disabled):hover{transform:scale(1.15) rotate(-6deg)}
+  .x:hover svg{transform:rotate(90deg) scale(1.12)}
+  .x[data-e]:hover svg{transform:rotate(-14deg) scale(1.18)}
+  .x svg{transition:transform .35s var(--spring)}
+  .mag-dot:hover{transform:scale(1.12) rotate(-8deg)}
+  .list li:not(.empty):hover{background-size:100% 100%}
+  .list li:hover .mag-dot{transform:scale(1.08) rotate(-5deg)}
+  .alert:hover,.turno:hover{transform:translateY(-3px)}
+  .sec:hover{transform:translateY(-3px);box-shadow:0 2px 0 rgba(22,36,58,.06),0 22px 34px -18px rgba(22,36,58,.5)}
+  .sec:hover::before{transform:translateX(-50%) rotate(-4deg) translateY(-3px)}
+  .sec:nth-of-type(even):hover::before{transform:translateX(-50%) rotate(3.5deg) translateY(-3px)}
+  .tile:hover{transform:translateY(calc(var(--ty) - 12px)) rotate(0deg) scale(1.16);z-index:1;
+    box-shadow:0 12px 0 rgba(0,0,0,.14),0 20px 18px -8px rgba(0,0,0,.4),inset 0 2px 0 rgba(255,255,255,.35)}
+  .tile:hover+.tile,.tile:has(+.tile:hover){transform:translateY(calc(var(--ty) - 5px)) rotate(var(--rot)) scale(1.05)}
+}
+
+/* al cambiar de pestaña: entrada escalonada (la clase .enter la pone un observador y se quita sola) */
+.enter .top h1{animation:slideIn .55s var(--out) backwards}
+.enter .logo{animation:pop .6s var(--spring) backwards}
+.enter .sec,.enter .alert,.enter .turno{animation:rise .6s var(--out) backwards}
+.enter .alert{animation:rise .6s var(--out) backwards}
+.enter .sec:nth-of-type(2){animation-delay:.07s}.enter .sec:nth-of-type(3){animation-delay:.14s}
+.enter .sec:nth-of-type(4){animation-delay:.21s}.enter .sec:nth-of-type(5){animation-delay:.28s}
+.enter .sec:nth-of-type(6){animation-delay:.35s}.enter .sec:nth-of-type(n+7){animation-delay:.42s}
+.enter .list li{animation:slideIn .5s var(--out) backwards}
+.enter .list li:nth-child(2){animation-delay:.05s}.enter .list li:nth-child(3){animation-delay:.1s}
+.enter .list li:nth-child(4){animation-delay:.15s}.enter .list li:nth-child(5){animation-delay:.2s}
+.enter .list li:nth-child(6){animation-delay:.25s}.enter .list li:nth-child(n+7){animation-delay:.3s}
+.enter .tiles .tile{animation:drop .75s var(--spring) backwards}
+.enter .tile:nth-child(2){animation-delay:.07s}.enter .tile:nth-child(3){animation-delay:.14s}
+.enter .tile:nth-child(4){animation-delay:.21s}.enter .tile:nth-child(5){animation-delay:.28s}
+.enter .tile:nth-child(6){animation-delay:.35s}
+.enter .seg i{transform-origin:bottom;animation:growY .55s var(--spring) backwards}
+.enter .seg i:nth-child(2){animation-delay:.05s}.enter .seg i:nth-child(3){animation-delay:.1s}
+.enter .seg i:nth-child(4){animation-delay:.15s}.enter .seg i:nth-child(5){animation-delay:.2s}
+.enter .seg i:nth-child(n+6){animation-delay:.25s}
+.enter .count{animation:pop .5s var(--spring) .25s backwards}
+.enter .day::after{transform-origin:left;animation:growX .7s var(--out) backwards}
+.nav button[aria-current="page"]{animation:pop .45s var(--spring)}
+@media (prefers-reduced-motion:reduce){ *,*::before,*::after{animation:none!important;transition:none!important} }
 </style>
 </head>
 <body>
@@ -669,6 +768,20 @@ app.addEventListener('click', async e => {
   const g = e.target.closest('[data-go]'); if (!g) return;
   S.tab = g.dataset.go; S.editItem = null; render(); window.scrollTo(0,0);
 });
+/* Animaciones: onda al pulsar y entrada al cambiar de pestaña */
+document.addEventListener('pointerdown', e => {
+  const b = e.target.closest && e.target.closest('.btn:not(:disabled),.nav button,.pisos button'); if (!b) return;
+  const r = b.getBoundingClientRect(), d = Math.max(r.width, r.height) * 2.4, rp = document.createElement('span');
+  rp.className = 'ripple';
+  rp.style.cssText = `width:${d}px;height:${d}px;left:${e.clientX - r.left - d/2}px;top:${e.clientY - r.top - d/2}px`;
+  b.appendChild(rp); rp.addEventListener('animationend', () => rp.remove());
+}, { passive:true });
+let ultimaVista = null, enterT;
+new MutationObserver(() => {
+  if (S.tab === ultimaVista || app.querySelector('.loading')) return;
+  ultimaVista = S.tab; app.classList.add('enter'); clearTimeout(enterT);
+  enterT = setTimeout(() => app.classList.remove('enter'), 1300);
+}).observe(app, { childList:true });
 function renderNav(){
   $('#navIn').innerHTML = TABS.map(([k,l]) => `<button data-tab="${k}" ${S.tab===k?'aria-current="page"':''}>${l}</button>`).join('');
   document.body.dataset.tab = S.tab;
