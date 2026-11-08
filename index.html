@@ -490,7 +490,7 @@ function demoApi(clave){
 }
 
 /* ---------- estado y arranque ---------- */
-const S = { api:null, tab:'piso', me:'', apt:null, members:[], busy:false, editItem:null, bills:[] };
+const S = { api:null, tab: ['compra','limpieza','facturas'].includes(new URLSearchParams(location.search).get('tab')) ? new URLSearchParams(location.search).get('tab') : 'piso', me:'', apt:null, members:[], busy:false, editItem:null, bills:[] };
 const app = $('#app');
 
 const memStore = {};
