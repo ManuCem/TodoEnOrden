@@ -92,6 +92,7 @@ button{cursor:pointer}
 /* cabecera */
 .top{padding:calc(14px + env(safe-area-inset-top,0px)) 0 16px}
 .logo{display:block;width:72px;height:auto}
+.logo-btn{display:block;padding:0;border:0;background:none;border-radius:12px;cursor:pointer;line-height:0}
 .meta{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px;font-size:14px;font-weight:600}
 .status{display:inline-flex;align-items:center;gap:7px;color:var(--muted);font-weight:600;background:var(--paper);
   border:1px solid var(--line);border-radius:99px;padding:5px 12px;box-shadow:var(--shadow)}
@@ -703,7 +704,7 @@ function header(title){
   const demo = S.api.kind === 'demo';
   const pisos = demo ? `<div class="pisos-label">Pisos de ejemplo</div><div class="pisos">${
     Object.entries(PISOS).map(([k,p]) => `<button data-piso="${k}" aria-pressed="${S.api.piso===k}">${esc(p.nombre)}</button>`).join('')}</div>` : '';
-  return `<header class="top"><div class="meta">${LOGO_IMG}
+  return `<header class="top"><div class="meta"><button class="logo-btn" data-go="piso" aria-label="Ir al menú principal">${LOGO_IMG}</button>
     <span style="display:flex;gap:8px;align-items:center">
       <span class="status ${demo?'demo':''}"><i></i>${demo?'Datos de ejemplo':'Conectado'}</span>
       ${S.api.kind === 'supabase' ? (S.anon
