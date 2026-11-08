@@ -499,6 +499,7 @@ function header(title){
   return `<header class="top"><div class="meta">${LOGO_IMG}
     <span style="display:flex;gap:8px;align-items:center">
       <span class="status ${demo?'demo':''}"><i></i>${demo?'Datos de ejemplo':'Conectado'}</span>
+      ${S.api.kind === 'supabase' && S.anon ? `<button class="status" data-google aria-label="Iniciar sesión con Google" style="font-weight:800">Iniciar sesión con Google</button>` : ''}
       <button class="status" data-go="ayuda" aria-label="Cómo funciona la app" style="font-weight:900">?</button>
     </span></div>
     <h1>${esc(title)}</h1>${pisos}${bannerHtml()}</header>`;
@@ -516,9 +517,17 @@ function bannerHtml(){
   const lines = urgent.slice(0,3).map(b => `${esc(b.name)} ${dueWords(daysUntil(b.next_due_date))}`).join('. ');
   return `<button class="alert" data-go="facturas"><b>${urgent.length===1?'Una factura vence pronto':urgent.length+' facturas vencen pronto'}</b>${lines}.</button>`;
 }
+async function googleLogin(){
+  const redirectTo = location.origin + location.pathname;
+  let { error } = await S.sb.auth.linkIdentity({ provider:'google', options:{ redirectTo } });
+  // Si esa cuenta de Google ya existe (otro móvil), entramos con ella en lugar de enlazar.
+  if (error) ({ error } = await S.sb.auth.signInWithOAuth({ provider:'google', options:{ redirectTo } }));
+  if (error) alert('No se pudo iniciar sesión con Google: ' + error.message);
+}
 app.addEventListener('click', async e => {
   const p = e.target.closest('[data-piso]');
   if (p){ if (p.dataset.piso === S.api.piso) return; S.api = demoApi(p.dataset.piso); S.editItem = null; await start(); window.scrollTo(0,0); return; }
+  if (e.target.closest('[data-google]')){ googleLogin(); return; }
   const g = e.target.closest('[data-go]'); if (!g) return;
   S.tab = g.dataset.go; S.editItem = null; render(); window.scrollTo(0,0);
 });
@@ -856,20 +865,8 @@ function renderAyuda(){
         <li><span class="grow"><span class="name">Todo es compartido</span><br><span class="small dim">Lo que añade uno lo ven los demás. Nadie de fuera del piso puede ver vuestros datos.</span></span></li>
         <li><span class="grow"><span class="name">Solo tú marcas lo tuyo</span><br><span class="small dim">Tus turnos de limpieza y tu parte de cada factura solo los puedes marcar tú.</span></span></li>
       </ul>
-      ${S.api.kind === 'supabase' ? (S.anon
-        ? `<button class="btn ghost" id="google" style="margin-top:14px;width:100%">Entrar con Google</button>
-           <p class="small dim" style="margin:6px 0 0">Guarda tu cuenta para no perder tu piso si cambias de móvil.</p>`
-        : `<p class="small dim" style="margin-top:14px">Sesión iniciada con Google${S.email ? ': ' + esc(S.email) : ''}.</p>`) : ''}
       <button class="btn" data-go="piso" style="margin-top:14px;width:100%">Entendido, volver al piso</button>
     </section>`;
-  const g = $('#google');
-  if (g) g.onclick = async () => {
-    const redirectTo = location.origin + location.pathname;
-    let { error } = await S.sb.auth.linkIdentity({ provider:'google', options:{ redirectTo } });
-    // Si esa cuenta de Google ya existe (otro móvil), entramos con ella en lugar de enlazar.
-    if (error) ({ error } = await S.sb.auth.signInWithOAuth({ provider:'google', options:{ redirectTo } }));
-    if (error) alert('No se pudo iniciar sesión con Google: ' + error.message);
-  };
 }
 
 /* Facturas periódicas: alta, reparto entre compañeros y pago de tu parte (TEO-34, TEO-31) */
