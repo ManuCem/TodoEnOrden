@@ -298,10 +298,16 @@ function remoteApi(sb, uid){
     kind:'supabase', uid,
     async myName(){ const r = ok(await sb.from('profiles').select('full_name').eq('id', uid).maybeSingle()); return r?.full_name || ''; },
     async setName(name){ ok(await sb.from('profiles').update({full_name:name}).eq('id', uid)); },
+    async myAvatar(){
+      if (!hayFoto) return '';
+      const r = await sb.from('profiles').select('avatar_url').eq('id', uid).maybeSingle();
+      if (r.error){ hayFoto = false; return ''; }
+      return r.data?.avatar_url || '';
+    },
     async setAvatar(url){
-      if (!hayFoto) return;
+      if (!hayFoto) throw new Error('Falta crear la columna avatar_url en la tabla profiles de Supabase.');
       const { error } = await sb.from('profiles').update({avatar_url:url}).eq('id', uid);
-      if (error) hayFoto = false;
+      if (error){ hayFoto = false; throw new Error('Falta crear la columna avatar_url en la tabla profiles de Supabase.'); }
     },
     async apartment(){
       const rows = ok(await sb.from('apartment_members').select('apartment_id, apartments(id,name,invite_code)').eq('user_id', uid).limit(1));
@@ -532,7 +538,10 @@ async function start(){
   if (S.api.kind === 'supabase' && !S.anon){
     // Con Google no hace falta escribir el nombre: se usa el de la cuenta (se puede cambiar luego en Piso).
     if (!S.me && S.nombreG){ try{ await S.api.setName(S.nombreG); S.me = S.nombreG; }catch{} }
-    if (S.avatar) await S.api.setAvatar(S.avatar).catch(() => {}); // para que tus compañeros vean tu foto
+  }
+  S.myAvatar = S.api.myAvatar ? await S.api.myAvatar().catch(() => '') : '';
+  if (!S.myAvatar && S.avatar && S.api.setAvatar && !S.anon){ // primera vez: tu foto de Google, para que tus compañeros la vean
+    try{ await S.api.setAvatar(S.avatar); S.myAvatar = S.avatar; }catch{}
   }
   await refreshApt();
   render();
@@ -555,7 +564,7 @@ function header(title){
         : `<button class="avatar" data-account aria-label="Menú de cuenta" aria-haspopup="true" aria-expanded="false">${avatarInner()}</button>`) : ''}
       <button class="status" data-go="ayuda" aria-label="Cómo funciona la app" style="font-weight:900">?</button>
     </span>${S.api.kind === 'supabase' && !S.anon ? `<div class="menu" id="userMenu" hidden>
-      <div class="who"><b>${esc(S.nombreG || 'Mi cuenta')}</b>${S.email ? `<small>${esc(S.email)}</small>` : ''}</div>
+      <div class="who"><b>${esc(nombreVisible())}</b>${S.email ? `<small>${esc(S.email)}</small>` : ''}</div>
       <button data-go="perfil">👤 Mi perfil</button>
       <button data-logout>↩ Cerrar sesión</button></div>` : ''}</div>
     <h1>${esc(title)}</h1>${pisos}${bannerHtml()}</header>`;
@@ -576,7 +585,8 @@ function bannerHtml(){
 const fotoOInicial = (url, nombre) => url
   ? `<img src="${esc(url)}" alt="" referrerpolicy="no-referrer" data-i="${esc(initial(nombre))}" onerror="this.replaceWith(this.dataset.i)">`
   : esc(initial(nombre));
-const avatarInner = () => fotoOInicial(S.avatar, S.nombreG);
+const nombreVisible = () => S.me || S.nombreG || 'Mi cuenta';
+const avatarInner = () => fotoOInicial(S.myAvatar || S.avatar, nombreVisible());
 const dotInner = m => fotoOInicial(m.avatar, m.name);
 const GOOGLE_G = '<svg width="16" height="16" viewBox="0 0 48 48" aria-hidden="true"><path fill="#EA4335" d="M24 9.5c3.5 0 6.6 1.2 9.1 3.6l6.8-6.8C35.8 2.4 30.3 0 24 0 14.6 0 6.5 5.4 2.6 13.2l7.9 6.1C12.4 13.6 17.7 9.5 24 9.5z"/><path fill="#4285F4" d="M46.5 24.5c0-1.6-.1-3.1-.4-4.5H24v9h12.7c-.6 3-2.2 5.5-4.7 7.2l7.6 5.9c4.4-4.1 6.9-10.1 6.9-17.6z"/><path fill="#FBBC05" d="M10.5 28.7A14.5 14.5 0 0 1 9.5 24c0-1.6.3-3.2.8-4.7l-7.9-6.1A24 24 0 0 0 0 24c0 3.9.9 7.5 2.6 10.8l7.9-6.1z"/><path fill="#34A853" d="M24 48c6.5 0 11.9-2.1 15.9-5.8l-7.6-5.9c-2.1 1.4-4.9 2.3-8.3 2.3-6.3 0-11.6-4.1-13.5-9.8l-7.9 6.1C6.5 42.6 14.6 48 24 48z"/></svg>';
 async function googleLogin(){
@@ -632,6 +642,58 @@ async function run(e, fn){
   finally{ S.busy = false; btns.forEach(b => { if (b.isConnected) b.disabled = false; }); }
 }
 
+/* Nombre y foto que ven tus compañeros (no cambian tu cuenta de Google) */
+function editorPerfilHtml(){
+  const foto = !!S.api.setAvatar;
+  return `<section class="sec">
+    <h2>Mi nombre y foto</h2>
+    <p class="sub">Es lo que verán tus compañeros en el piso.${S.anon ? '' : ' No cambia tu cuenta de Google.'}</p>
+    ${foto ? `<div class="perfil-head" style="margin:10px 0 14px">
+      <span class="avatar big">${avatarInner()}</span>
+      <span class="stack" style="gap:8px">
+        <button class="btn ghost small" type="button" id="fotoBtn">Subir foto</button>
+        ${!S.anon && S.avatar && S.myAvatar !== S.avatar ? '<button class="link" type="button" id="fotoGoogle">Usar la de Google</button>' : ''}
+      </span>
+      <input id="fotoFile" type="file" accept="image/*" hidden>
+    </div>` : ''}
+    <form class="row" id="fName" style="margin-top:10px">
+      <input id="newName" maxlength="40" value="${esc(S.me)}" aria-label="Tu nombre" required>
+      <button class="btn" type="submit">Guardar</button>
+    </form>
+  </section>`;
+}
+function reducirFoto(file, lado = 160){
+  return new Promise((ok, fail) => {
+    const img = new Image(), url = URL.createObjectURL(file);
+    img.onload = () => {
+      const c = document.createElement('canvas'); c.width = c.height = lado;
+      const m = Math.min(img.width, img.height);
+      c.getContext('2d').drawImage(img, (img.width - m) / 2, (img.height - m) / 2, m, m, 0, 0, lado, lado);
+      URL.revokeObjectURL(url); ok(c.toDataURL('image/jpeg', .82));
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); fail(new Error('No he podido leer esa imagen.')); };
+    img.src = url;
+  });
+}
+function bindEditorPerfil(rerender){
+  const recargar = async () => { if (S.apt) S.members = await S.api.members(S.apt.id); };
+  $('#fName').onsubmit = e => run(e, async () => {
+    const n = $('#newName').value.trim(); if (!n) return;
+    await S.api.setName(n); S.me = n; await recargar(); toast('Nombre actualizado.'); rerender();
+  });
+  const f = $('#fotoFile'); if (!f) return;
+  const guardar = async url => {
+    try{ await S.api.setAvatar(url); S.myAvatar = url; await recargar(); toast('Foto actualizada.'); rerender(); }
+    catch(err){ toast(friendly(err)); }
+  };
+  $('#fotoBtn').onclick = () => f.click();
+  f.onchange = async () => {
+    const file = f.files[0]; if (!file) return;
+    try{ await guardar(await reducirFoto(file)); }catch(err){ toast(friendly(err)); }
+  };
+  const g = $('#fotoGoogle'); if (g) g.onclick = () => guardar(S.avatar);
+}
+
 /* Mi perfil: la cuenta de Google y todos mis pisos, con su código y su información */
 async function renderPerfil(){
   const pisos = await S.api.apartments();
@@ -667,11 +729,13 @@ async function renderPerfil(){
   app.innerHTML = `${header('Mi perfil')}
     <section class="sec perfil-head">
       <span class="avatar big">${avatarInner()}</span>
-      <span class="grow"><span class="name">${esc(S.nombreG || 'Mi cuenta')}</span><br><span class="small dim">${esc(S.email)}</span></span>
+      <span class="grow"><span class="name">${esc(nombreVisible())}</span><br><span class="small dim">Cuenta de Google: ${esc(S.email)}</span></span>
     </section>
+    ${editorPerfilHtml()}
     <div class="sec-head" style="margin:18px 2px 0"><h2>Mis pisos</h2><span class="count">${info.length}</span></div>
     ${info.length ? info.map(card).join('') : `<section class="sec"><p class="sub" style="margin:0">Todavía no estás en ningún piso.</p><button class="btn" data-go="piso" style="margin-top:12px">Crear o unirme a un piso</button></section>`}
     <section class="sec"><button class="btn danger" data-logout style="width:100%">Cerrar sesión</button></section>`;
+  bindEditorPerfil(renderPerfil);
   app.querySelectorAll('[data-copy]').forEach(b => b.onclick = async () => {
     try{ await navigator.clipboard.writeText(b.dataset.copy); toast('Código copiado.'); }
     catch{ toast('Copia el código a mano: ' + b.dataset.copy); }
@@ -685,14 +749,11 @@ async function renderPerfil(){
 /* Sin piso: nombre + crear o unirse (TEO-8) */
 function renderOnboarding(){
   app.innerHTML = `${header('Tu piso, en orden')}
-    ${S.me && !S.anon ? `<section class="sec perfil-head">
-      <span class="avatar big">${avatarInner()}</span>
-      <span class="grow"><span class="name">Entrarás como ${esc(S.me)}</span><br><span class="small dim">Es el nombre de tu cuenta de Google. Podrás cambiarlo después en Piso.</span></span>
-    </section>` : `<section class="sec">
+    <section class="sec">
       <h2>¿Cómo te llamas?</h2>
-      <p class="sub">Es el nombre que verán tus compañeros.</p>
+      <p class="sub">Es el nombre que verán tus compañeros.${!S.anon && S.me ? ' Lo hemos rellenado con el de tu cuenta de Google; cámbialo si quieres.' : ''}</p>
       <label>Tu nombre<input id="myName" maxlength="40" autocomplete="given-name" value="${esc(S.me)}" placeholder="Marta"></label>
-    </section>`}
+    </section>
     <section class="sec">
       <h2>Crear un piso</h2>
       <p class="sub">Recibes un código de 6 letras para invitar a tus compañeros.</p>
@@ -751,13 +812,7 @@ async function renderPiso(){
           <span class="grow name">${esc(m.name)}</span>
           ${m.id===S.api.uid ? '<span class="you">Tú</span>' : ''}</li>`).join('')}</ul>
     </section>
-    <section class="sec">
-      <h2>Cambiar mi nombre</h2>
-      <form class="row" id="fName" style="margin-top:10px">
-        <input id="newName" maxlength="40" value="${esc(S.me)}" aria-label="Tu nombre" required>
-        <button class="btn" type="submit">Guardar</button>
-      </form>
-    </section>
+    ${editorPerfilHtml()}
     <section class="sec">
       <h2>Salir del piso</h2>
       <p class="sub">Dejarás de ver sus datos. Podrás volver a entrar con el código.</p>
@@ -775,10 +830,7 @@ async function renderPiso(){
     try{ await navigator.clipboard.writeText(apt.invite_code); toast('Código copiado.'); }
     catch{ toast('Copia el código a mano: ' + apt.invite_code); }
   };
-  $('#fName').onsubmit = e => run(e, async () => {
-    const n = $('#newName').value.trim(); if (!n) return;
-    await S.api.setName(n); S.me = n; await refreshApt(); toast('Nombre actualizado.'); renderPiso();
-  });
+  bindEditorPerfil(renderPiso);
   $('#leave').onclick = async () => {
     $('#leaveConfirm').hidden = false; $('#leave').hidden = true;
     let bal = 0, known = true;
