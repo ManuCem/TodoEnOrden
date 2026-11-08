@@ -298,6 +298,7 @@ const mc = id => 'm' + (((S.members.findIndex(m => m.id === id) + 6) % 6) + 1);
 /* ---------- capa de datos: Supabase real ---------- */
 function remoteApi(sb, uid){
   const ok = ({data, error}) => { if (error) throw error; return data; };
+  let hayOwner = true; // pasa a false si apartments.owner_id todavia no existe
   let hayFoto = true; // pasa a false si la columna profiles.avatar_url todavia no existe
   return {
     kind:'supabase', uid,
@@ -315,12 +316,16 @@ function remoteApi(sb, uid){
       if (error){ hayFoto = false; throw new Error('Falta crear la columna avatar_url en la tabla profiles de Supabase.'); }
     },
     async apartment(){
-      const rows = ok(await sb.from('apartment_members').select('apartment_id, apartments(id,name,invite_code)').eq('user_id', uid).limit(1));
-      return rows[0]?.apartments || null;
+      const q = c => sb.from('apartment_members').select(`apartment_id, apartments(${c})`).eq('user_id', uid).limit(1);
+      let r = await q(hayOwner ? 'id,name,invite_code,owner_id' : 'id,name,invite_code');
+      if (r.error && hayOwner){ hayOwner = false; r = await q('id,name,invite_code'); }
+      return ok(r)[0]?.apartments || null;
     },
     async apartments(){
-      const rows = ok(await sb.from('apartment_members').select('created_at, apartments(id,name,invite_code)').eq('user_id', uid).order('created_at'));
-      return rows.map(r => r.apartments).filter(Boolean);
+      const q = c => sb.from('apartment_members').select(`created_at, apartments(${c})`).eq('user_id', uid).order('created_at');
+      let r = await q(hayOwner ? 'id,name,invite_code,owner_id' : 'id,name,invite_code');
+      if (r.error && hayOwner){ hayOwner = false; r = await q('id,name,invite_code'); }
+      return ok(r).map(x => x.apartments).filter(Boolean);
     },
     async deleteAccount(){
       const { error } = await sb.rpc('delete_my_account');
@@ -337,7 +342,19 @@ function remoteApi(sb, uid){
       if (r.error && hayFoto){ hayFoto = false; r = await q('full_name'); }
       return ok(r).map(x => ({id:x.user_id, name:x.profiles?.full_name || 'Sin nombre', avatar:x.profiles?.avatar_url || ''}));
     },
-    async leave(aptId){ ok(await sb.from('apartment_members').delete().eq('apartment_id', aptId).eq('user_id', uid)); },
+    async leave(aptId, nuevoAdmin){
+      // leave_apartment pasa el admin a otra persona y borra el piso si eres la última; si aún no existe en Supabase, solo se sale
+      const r = await sb.rpc('leave_apartment', { p_id: String(aptId), p_new_owner: nuevoAdmin || null });
+      if (r.error && r.error.code === 'PGRST202') ok(await sb.from('apartment_members').delete().eq('apartment_id', aptId).eq('user_id', uid));
+      else if (r.error) throw r.error;
+    },
+    async deleteApartment(aptId){
+      const { error } = await sb.rpc('delete_apartment', { p_id: String(aptId) });
+      if (error){
+        if (error.code === 'PGRST202') throw new Error('Falta crear la función delete_apartment en Supabase.');
+        throw error;
+      }
+    },
     async myBalance(aptId){
       const r = ok(await sb.from('apartment_balances').select('balance').eq('apartment_id', aptId).eq('user_id', uid).maybeSingle());
       return Number(r?.balance ?? 0);
@@ -430,7 +447,7 @@ function demoApi(clave){
     myName:()=>wait(db.myName), setName:n=>{ db.myName=n; db.members[0].name=n; return wait(); },
     apartment:()=>wait(db.apt), apartments:()=>wait(db.apt ? [db.apt] : []), createApartment:n=>{ db.apt={id:'apt-nuevo',name:n,invite_code:'M4R7TA'}; return wait(); },
     joinApartment:c=>{ const ok = Object.values(PISOS).some(p => p.code === c.toUpperCase()) || c.toUpperCase()===(db.apt?.invite_code||''); return ok ? wait() : Promise.reject(new Error('Código de piso no válido')); },
-    members:()=>wait(db.members.slice()), leave:()=>{ db.apt=null; return wait(); },
+    members:()=>wait(db.members.slice()), leave:()=>{ db.apt=null; return wait(); }, deleteApartment:()=>{ db.apt=null; return wait(); },
     myBalance:()=>wait(P.saldo),
     items:()=>wait(db.items.slice().sort((a,b)=>a.is_bought-b.is_bought || b.created_at.localeCompare(a.created_at))),
     addItem:(a,name)=>{ if (db.items.some(i=>i.name.toLowerCase()===name.toLowerCase())) return Promise.reject({code:'23505',message:'dup'}); db.items.push({id:id('i'),name,is_bought:false,created_at:new Date().toISOString()}); return wait(); },
@@ -612,6 +629,8 @@ function bannerHtml(){
 const fotoOInicial = (url, nombre) => url
   ? `<img src="${esc(url)}" alt="" referrerpolicy="no-referrer" data-i="${esc(initial(nombre))}" onerror="this.replaceWith(this.dataset.i)">`
   : esc(initial(nombre));
+// Admin = quien creó el piso (apartments.owner_id). Sin esa columna o sin dato, todos cuentan como admin (comportamiento anterior).
+const esAdmin = apt => !apt || apt.owner_id == null || apt.owner_id === S.api.uid;
 const nombreVisible = () => S.me || S.nombreG || 'Mi cuenta';
 const avatarInner = () => fotoOInicial(S.myAvatar || S.avatar, nombreVisible());
 const dotInner = m => fotoOInicial(m.avatar, m.name);
@@ -724,15 +743,34 @@ function bindEditorPerfil(rerender){
 
 /* Salir del piso actual (antes en la pestaña Piso) */
 function salirPisoHtml(apt){
+  const otros = S.members.filter(m => m.id !== S.api.uid);
+  const admin = esAdmin(apt);
+  const elegir = admin && apt.owner_id && otros.length ? `<label style="margin:0 0 10px">Eres el admin de este piso. Elige quién será el nuevo admin:
+          <select id="newOwner"><option value="">Elige a una persona…</option>${otros.map(m => `<option value="${esc(m.id)}">${esc(m.name)}</option>`).join('')}</select></label>` : '';
+  const quien = S.members.find(m => m.id === apt.owner_id);
   return `<section class="sec">
       <h2>Salir de ${esc(apt.name)}</h2>
-      <p class="sub">Dejarás de ver sus datos. Podrás volver a entrar con el código.</p>
+      <p class="sub">Dejarás de ver sus datos. Podrás volver a entrar con el código. ${admin && apt.owner_id ? 'Como eres el admin, tendrás que elegir a otra persona como admin. ' : ''}Si eres la última persona del piso, el piso se elimina.</p>
       <button class="btn danger" id="leave">Salir del piso</button>
       <div class="confirm" id="leaveConfirm" hidden>
         <p id="leaveMsg" style="margin:0 0 10px;font-size:15px">Comprobando tus cuentas…</p>
+        ${elegir}
         <div class="row"><button class="btn danger small" id="leaveYes" hidden>Sí, salir</button><button class="btn ghost small" id="leaveNo">Cancelar</button></div>
       </div>
-    </section>`;
+    </section>
+    ${admin ? `<section class="sec">
+      <h2>Eliminar el piso para todos</h2>
+      <p class="sub">Solo el admin puede hacerlo. Se borra “${esc(apt.name)}” con su compra, limpieza y facturas, y todos tus compañeros lo pierden. No se puede deshacer.</p>
+      <button class="btn danger" id="delApt">Eliminar el piso para todos</button>
+      <div class="confirm" id="delAptConfirm" hidden>
+        <p style="margin:0 0 10px;font-size:15px"><b>Escribe el nombre del piso para confirmar:</b> ${esc(apt.name)}</p>
+        <input id="delAptName" autocomplete="off" aria-label="Nombre del piso" placeholder="${esc(apt.name)}" style="margin-bottom:10px">
+        <div class="row"><button class="btn danger small" id="delAptYes" disabled>Sí, eliminar el piso</button><button class="btn ghost small" id="delAptNo">Cancelar</button></div>
+      </div>
+    </section>` : `<section class="sec">
+      <h2>Admin del piso</h2>
+      <p class="sub" style="margin:0">Solo ${quien ? '<b>' + esc(quien.name) + '</b>' : 'el admin'}, que creó el piso, puede eliminarlo para todos.</p>
+    </section>`}`;
 }
 function bindSalirPiso(apt){
   $('#leave').onclick = async () => {
@@ -753,8 +791,19 @@ function bindSalirPiso(apt){
   };
   $('#leaveNo').onclick = () => { $('#leaveConfirm').hidden = true; $('#leave').hidden = false; };
   $('#leaveYes').onclick = async () => {
-    try{ await S.api.leave(apt.id); await refreshApt(); S.tab = 'piso'; toast('Has salido del piso.'); render(); }
+    const sel = $('#newOwner');
+    if (sel && !sel.value){ toast('Elige quién será el nuevo admin antes de salir.'); return; }
+    try{ await S.api.leave(apt.id, sel ? sel.value : null); await refreshApt(); S.tab = 'piso'; toast('Has salido del piso.'); render(); }
     catch(err){ toast(friendly(err)); }
+  };
+  if (!$('#delApt')) return;
+  $('#delApt').onclick = () => { $('#delAptConfirm').hidden = false; $('#delApt').hidden = true; $('#delAptName').focus(); };
+  $('#delAptNo').onclick = () => { $('#delAptConfirm').hidden = true; $('#delApt').hidden = false; $('#delAptName').value = ''; $('#delAptYes').disabled = true; };
+  $('#delAptName').oninput = () => { $('#delAptYes').disabled = $('#delAptName').value.trim().toLowerCase() !== apt.name.trim().toLowerCase(); };
+  $('#delAptYes').onclick = async () => {
+    $('#delAptYes').disabled = true;
+    try{ await S.api.deleteApartment(apt.id); await refreshApt(); S.tab = 'piso'; toast('Piso eliminado.'); render(); }
+    catch(err){ $('#delAptYes').disabled = false; toast(friendly(err)); }
   };
 }
 
@@ -780,7 +829,7 @@ async function renderPerfil(){
       <div class="tiles" aria-label="Código ${esc(a.invite_code.split('').join(' '))}">${tiles}</div>
       <button class="link" data-copy="${esc(a.invite_code)}">Copiar código</button>
       <ul class="list" style="margin-top:10px">
-        ${fila(`Compañeros (${mem.length})`, mem.length ? mem.map((m, i) => `<span class="mini-m"><span class="mag-dot mag sm m${(i%6)+1}">${dotInner(m)}</span>${esc(m.name)}${m.id === S.api.uid ? ' (tú)' : ''}</span>`).join('') : 'Sin datos')}
+        ${fila(`Compañeros (${mem.length})`, mem.length ? mem.map((m, i) => `<span class="mini-m"><span class="mag-dot mag sm m${(i%6)+1}">${dotInner(m)}</span>${esc(m.name)}${m.id === S.api.uid ? ' (tú)' : ''}${a.owner_id && m.id === a.owner_id ? ' · admin' : ''}</span>`).join('') : 'Sin datos')}
         ${fila('Compra', `${pend} ${pend === 1 ? 'pendiente' : 'pendientes'} · ${items.length - pend} ${items.length - pend === 1 ? 'comprado' : 'comprados'}`)}
         ${fila(`Limpieza (${zones.length} ${zones.length === 1 ? 'zona' : 'zonas'})`, zones.length ? zones.map(z => esc(z.name)).join(', ') : 'Sin zonas todavía')}
         ${fila(`Facturas (${bills.length})`, bills.length
@@ -802,7 +851,7 @@ async function renderPerfil(){
     ${S.apt ? salirPisoHtml(S.apt) : ''}
     <section class="sec">
       <h2>Eliminar mi cuenta</h2>
-      <p class="sub">Se borra tu cuenta y tus datos personales, y saldrás de tus pisos. No se puede deshacer.</p>
+      <p class="sub">Se borra tu cuenta y tus datos personales, y saldrás de tus pisos. Si eres admin de un piso con más gente, se elige otro admin al azar; si estás solo, el piso se elimina. No se puede deshacer.</p>
       <button class="btn danger" id="delAcc">Eliminar mi cuenta</button>
       <div class="confirm" id="delConfirm" hidden>
         <p style="margin:0 0 10px;font-size:15px"><b>¿Seguro?</b> Perderás tu acceso a los pisos y tus tareas, pagos y fotos de perfil se borrarán.</p>
@@ -927,6 +976,7 @@ async function renderPiso(){
       <ul class="list">${S.members.map(m => `
         <li><span class="mag-dot mag ${mc(m.id)}">${dotInner(m)}</span>
           <span class="grow name">${esc(m.name)}</span>
+          ${apt.owner_id && m.id === apt.owner_id ? '<span class="you">Admin</span>' : ''}
           ${m.id===S.api.uid ? '<span class="you">Tú</span>' : ''}</li>`).join('')}</ul>
     </section>`;
   app.querySelectorAll('[data-turno]').forEach(b => b.onclick = async () => {
