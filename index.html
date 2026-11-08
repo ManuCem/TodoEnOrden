@@ -275,7 +275,7 @@ input.invalid,select.invalid{border-color:var(--bad)}
 .btn,.nav button,.pisos button{position:relative;overflow:hidden;isolation:isolate}
 .btn::after{content:"";position:absolute;top:0;bottom:0;left:-70%;width:45%;transform:skewX(-20deg);pointer-events:none;
   background:linear-gradient(100deg,transparent,color-mix(in srgb,currentColor 24%,transparent),transparent);transition:left .7s var(--out)}
-.ripple{position:absolute;border-radius:50%;pointer-events:none;background:currentColor;animation:ripple .65s var(--out) forwards;z-index:0}
+.ripple{position:absolute;border-radius:50%;pointer-events:none;background:currentColor;opacity:0;transform:scale(0);animation:ripple .65s var(--out) forwards;z-index:-1}
 
 /* indicador de conexion: pulso */
 .status i{position:relative}
@@ -771,11 +771,13 @@ app.addEventListener('click', async e => {
 });
 /* Animaciones: onda al pulsar y entrada al cambiar de pestaña */
 document.addEventListener('pointerdown', e => {
+  if (matchMedia('(prefers-reduced-motion: reduce)').matches) return;
   const b = e.target.closest && e.target.closest('.btn:not(:disabled),.nav button,.pisos button'); if (!b) return;
   const r = b.getBoundingClientRect(), d = Math.max(r.width, r.height) * 2.4, rp = document.createElement('span');
   rp.className = 'ripple';
   rp.style.cssText = `width:${d}px;height:${d}px;left:${e.clientX - r.left - d/2}px;top:${e.clientY - r.top - d/2}px`;
   b.appendChild(rp); rp.addEventListener('animationend', () => rp.remove());
+  setTimeout(() => rp.remove(), 800); // por si el botón se oculta a media animación y animationend no llega
 }, { passive:true });
 let ultimaVista = null, enterT;
 new MutationObserver(() => {
