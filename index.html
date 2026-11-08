@@ -102,6 +102,8 @@ button{cursor:pointer}
 .avatar{width:34px;height:34px;padding:0;border-radius:50%;border:2px solid var(--accent);background:var(--accent-soft);
   color:var(--ink);font-weight:800;display:inline-flex;align-items:center;justify-content:center;overflow:hidden;box-shadow:var(--shadow)}
 .avatar img{width:100%;height:100%;object-fit:cover;display:block}
+.avatar.big{width:56px;height:56px;font-size:22px;box-shadow:none}
+.perfil-head{display:flex;align-items:center;gap:14px}
 .menu{position:absolute;right:0;top:calc(100% - 4px);z-index:20;min-width:220px;background:var(--paper);border:1px solid var(--line);
   border-radius:14px;box-shadow:var(--shadow);padding:6px}
 .menu .who{display:flex;flex-direction:column;gap:2px;padding:10px 12px 12px;border-bottom:1px solid var(--line);margin-bottom:4px}
@@ -295,6 +297,10 @@ function remoteApi(sb, uid){
       const rows = ok(await sb.from('apartment_members').select('apartment_id, apartments(id,name,invite_code)').eq('user_id', uid).limit(1));
       return rows[0]?.apartments || null;
     },
+    async apartments(){
+      const rows = ok(await sb.from('apartment_members').select('created_at, apartments(id,name,invite_code)').eq('user_id', uid).order('created_at'));
+      return rows.map(r => r.apartments).filter(Boolean);
+    },
     async createApartment(name){ ok(await sb.rpc('create_apartment',{p_name:name})); },
     async joinApartment(code){ ok(await sb.rpc('join_apartment',{p_code:code})); },
     async members(aptId){
@@ -392,7 +398,7 @@ function demoApi(clave){
   return {
     kind:'demo', uid:me, piso:pisoDemo,
     myName:()=>wait(db.myName), setName:n=>{ db.myName=n; db.members[0].name=n; return wait(); },
-    apartment:()=>wait(db.apt), createApartment:n=>{ db.apt={id:'apt-nuevo',name:n,invite_code:'M4R7TA'}; return wait(); },
+    apartment:()=>wait(db.apt), apartments:()=>wait(db.apt ? [db.apt] : []), createApartment:n=>{ db.apt={id:'apt-nuevo',name:n,invite_code:'M4R7TA'}; return wait(); },
     joinApartment:c=>{ const ok = Object.values(PISOS).some(p => p.code === c.toUpperCase()) || c.toUpperCase()===(db.apt?.invite_code||''); return ok ? wait() : Promise.reject(new Error('Código de piso no válido')); },
     members:()=>wait(db.members.slice()), leave:()=>{ db.apt=null; return wait(); },
     myBalance:()=>wait(P.saldo),
@@ -460,6 +466,14 @@ async function boot(forceDemo){
     const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY, {
       auth: { storage: safeStorage, persistSession: true, autoRefreshToken: true, detectSessionInUrl: true }
     });
+    // Si la cuenta de Google ya existía, Supabase no puede enlazarla al usuario anónimo y vuelve con un error: entramos con ella.
+    const q = new URLSearchParams(location.hash.replace(/^#/, '') + '&' + location.search.slice(1));
+    if (/identity_already_exists|already linked/i.test((q.get('error_code') || '') + ' ' + (q.get('error_description') || ''))){
+      history.replaceState(null, '', location.pathname);
+      const { error } = await sb.auth.signInWithOAuth({ provider:'google', options:{ redirectTo: location.origin + location.pathname } });
+      if (error) throw error;
+      return;
+    }
     let session = null;
     try{ session = (await limite(sb.auth.getSession(), 4000, 'tiempo'))?.data?.session || null; }catch{ session = null; }
     if (!session){
@@ -468,9 +482,14 @@ async function boot(forceDemo){
       if (error) throw error;
       session = data.session;
     }
-    S.sb = sb; S.anon = !!session.user.is_anonymous; S.email = session.user.email || '';
-    const meta = session.user.user_metadata || {};
-    S.avatar = meta.avatar_url || meta.picture || ''; S.nombreG = meta.full_name || meta.name || S.email;
+    // Al enlazar Google, nombre y foto solo viven en las identidades del usuario, no en user_metadata.
+    let user = session.user;
+    try{ const r = await limite(sb.auth.getUser(), 4000, 'tiempo'); if (r?.data?.user) user = r.data.user; }catch{}
+    const gId = (user.identities || []).find(i => i.provider === 'google')?.identity_data || {};
+    const meta = user.user_metadata || {};
+    S.sb = sb; S.anon = !!user.is_anonymous; S.email = user.email || gId.email || '';
+    S.avatar = gId.avatar_url || gId.picture || meta.avatar_url || meta.picture || '';
+    S.nombreG = gId.full_name || gId.name || meta.full_name || meta.name || S.email;
     S.api = remoteApi(sb, session.user.id);
     await limite(S.api.myName(), 9000, 'La base de datos no responde desde aquí.');
     return start();
@@ -520,6 +539,7 @@ function header(title){
       <button class="status" data-go="ayuda" aria-label="Cómo funciona la app" style="font-weight:900">?</button>
     </span>${S.api.kind === 'supabase' && !S.anon ? `<div class="menu" id="userMenu" hidden>
       <div class="who"><b>${esc(S.nombreG || 'Mi cuenta')}</b>${S.email ? `<small>${esc(S.email)}</small>` : ''}</div>
+      <button data-go="perfil">👤 Mi perfil</button>
       <button data-logout>↩ Cerrar sesión</button></div>` : ''}</div>
     <h1>${esc(title)}</h1>${pisos}${bannerHtml()}</header>`;
 }
@@ -543,9 +563,10 @@ function avatarInner(){
 const GOOGLE_G = '<svg width="16" height="16" viewBox="0 0 48 48" aria-hidden="true"><path fill="#EA4335" d="M24 9.5c3.5 0 6.6 1.2 9.1 3.6l6.8-6.8C35.8 2.4 30.3 0 24 0 14.6 0 6.5 5.4 2.6 13.2l7.9 6.1C12.4 13.6 17.7 9.5 24 9.5z"/><path fill="#4285F4" d="M46.5 24.5c0-1.6-.1-3.1-.4-4.5H24v9h12.7c-.6 3-2.2 5.5-4.7 7.2l7.6 5.9c4.4-4.1 6.9-10.1 6.9-17.6z"/><path fill="#FBBC05" d="M10.5 28.7A14.5 14.5 0 0 1 9.5 24c0-1.6.3-3.2.8-4.7l-7.9-6.1A24 24 0 0 0 0 24c0 3.9.9 7.5 2.6 10.8l7.9-6.1z"/><path fill="#34A853" d="M24 48c6.5 0 11.9-2.1 15.9-5.8l-7.6-5.9c-2.1 1.4-4.9 2.3-8.3 2.3-6.3 0-11.6-4.1-13.5-9.8l-7.9 6.1C6.5 42.6 14.6 48 24 48z"/></svg>';
 async function googleLogin(){
   const redirectTo = location.origin + location.pathname;
-  let { error } = await S.sb.auth.linkIdentity({ provider:'google', options:{ redirectTo } });
-  // Si esa cuenta de Google ya existe (otro móvil), entramos con ella en lugar de enlazar.
-  if (error) ({ error } = await S.sb.auth.signInWithOAuth({ provider:'google', options:{ redirectTo } }));
+  // Con un piso creado, enlazamos Google al usuario actual para conservarlo; sin piso, entramos directamente.
+  const { error } = S.apt
+    ? await S.sb.auth.linkIdentity({ provider:'google', options:{ redirectTo } })
+    : await S.sb.auth.signInWithOAuth({ provider:'google', options:{ redirectTo } });
   if (error) alert('No se pudo iniciar sesión con Google: ' + error.message);
 }
 document.addEventListener('click', e => { const m = $('#userMenu'); if (m && !m.hidden && !e.target.closest('#userMenu,[data-account]')) m.hidden = true; });
@@ -566,6 +587,12 @@ function renderNav(){
   $('#navIn').querySelectorAll('button').forEach(b => b.onclick = () => { S.tab = b.dataset.tab; S.editItem = null; render(); window.scrollTo(0,0); });
 }
 async function render(){
+  if (S.tab === 'perfil' && !(S.api.kind === 'supabase' && !S.anon)) S.tab = 'piso';
+  if (S.tab === 'perfil'){
+    $('#nav').hidden = !S.apt; if (S.apt) renderNav();
+    document.body.dataset.tab = 'perfil';
+    try{ return await renderPerfil(); }catch(e){ toast(friendly(e)); return; }
+  }
   if (!S.apt){ S.bills = []; $('#nav').hidden = true; return renderOnboarding(); }
   $('#nav').hidden = false; renderNav();
   document.body.dataset.tab = S.tab;
@@ -585,6 +612,56 @@ async function run(e, fn){
   const btns = [...app.querySelectorAll('button')]; btns.forEach(b => b.disabled = true);
   try{ await fn(); }catch(err){ toast(friendly(err)); }
   finally{ S.busy = false; btns.forEach(b => { if (b.isConnected) b.disabled = false; }); }
+}
+
+/* Mi perfil: la cuenta de Google y todos mis pisos, con su código y su información */
+async function renderPerfil(){
+  const pisos = await S.api.apartments();
+  const info = await Promise.all(pisos.map(async a => {
+    const [mem, items, zones, bills] = await Promise.all([
+      S.api.members(a.id).catch(() => []), S.api.items(a.id).catch(() => []),
+      S.api.zones(a.id).catch(() => []), S.api.bills(a.id).catch(() => [])]);
+    return { a, mem, items, zones, bills };
+  }));
+  if (S.tab !== 'perfil') return;
+  const fila = (t, d) => `<li><span class="grow"><span class="name">${t}</span><br><span class="small dim">${d}</span></span></li>`;
+  const card = ({ a, mem, items, zones, bills }) => {
+    const actual = S.apt && S.apt.id === a.id;
+    const pend = items.filter(i => !i.is_bought).length;
+    const total = bills.reduce((n, b) => n + Number(b.amount), 0);
+    const tiles = a.invite_code.split('').map((c, i) => `<span class="tile mag m${(i%6)+1}">${esc(c)}</span>`).join('');
+    return `<section class="sec">
+      <div class="sec-head"><h2>${esc(a.name)}</h2>${actual ? '<span class="you">Piso actual</span>' : ''}</div>
+      <p class="sub">Código del piso</p>
+      <div class="tiles" aria-label="Código ${esc(a.invite_code.split('').join(' '))}">${tiles}</div>
+      <button class="link" data-copy="${esc(a.invite_code)}">Copiar código</button>
+      <ul class="list" style="margin-top:10px">
+        ${fila(`Compañeros (${mem.length})`, mem.length ? mem.map(m => esc(m.name) + (m.id === S.api.uid ? ' (tú)' : '')).join(', ') : 'Sin datos')}
+        ${fila('Compra', `${pend} ${pend === 1 ? 'pendiente' : 'pendientes'} · ${items.length - pend} ${items.length - pend === 1 ? 'comprado' : 'comprados'}`)}
+        ${fila(`Limpieza (${zones.length} ${zones.length === 1 ? 'zona' : 'zonas'})`, zones.length ? zones.map(z => esc(z.name)).join(', ') : 'Sin zonas todavía')}
+        ${fila(`Facturas (${bills.length})`, bills.length
+          ? `${eur(total)} en total<br>` + bills.map(b => `${esc(b.name)}: ${eur(b.amount)} ${esc((FREQ[b.frequency] || '').toLowerCase())}, próximo ${esc(fmtDate(b.next_due_date))}`).join('<br>')
+          : 'Sin facturas activas')}
+      </ul>
+      ${actual ? '' : `<button class="btn ghost" data-open="${esc(a.id)}" style="margin-top:12px;width:100%">Abrir este piso</button>`}
+    </section>`;
+  };
+  app.innerHTML = `${header('Mi perfil')}
+    <section class="sec perfil-head">
+      <span class="avatar big">${avatarInner()}</span>
+      <span class="grow"><span class="name">${esc(S.nombreG || 'Mi cuenta')}</span><br><span class="small dim">${esc(S.email)}</span></span>
+    </section>
+    <div class="sec-head" style="margin:18px 2px 0"><h2>Mis pisos</h2><span class="count">${info.length}</span></div>
+    ${info.length ? info.map(card).join('') : `<section class="sec"><p class="sub" style="margin:0">Todavía no estás en ningún piso.</p><button class="btn" data-go="piso" style="margin-top:12px">Crear o unirme a un piso</button></section>`}
+    <section class="sec"><button class="btn danger" data-logout style="width:100%">Cerrar sesión</button></section>`;
+  app.querySelectorAll('[data-copy]').forEach(b => b.onclick = async () => {
+    try{ await navigator.clipboard.writeText(b.dataset.copy); toast('Código copiado.'); }
+    catch{ toast('Copia el código a mano: ' + b.dataset.copy); }
+  });
+  app.querySelectorAll('[data-open]').forEach(b => b.onclick = async () => {
+    const x = info.find(i => i.a.id === b.dataset.open); if (!x) return;
+    S.apt = x.a; S.members = x.mem; S.tab = 'piso'; render(); window.scrollTo(0, 0);
+  });
 }
 
 /* Sin piso: nombre + crear o unirse (TEO-8) */
