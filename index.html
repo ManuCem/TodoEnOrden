@@ -445,7 +445,7 @@ async function boot(forceDemo){
   try{
     if (!window.supabase) throw new Error('No se pudo cargar la librería de Supabase. Comprueba tu conexión a internet.');
     const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY, {
-      auth: { storage: safeStorage, persistSession: true, autoRefreshToken: true, detectSessionInUrl: false }
+      auth: { storage: safeStorage, persistSession: true, autoRefreshToken: true, detectSessionInUrl: true }
     });
     let session = null;
     try{ session = (await limite(sb.auth.getSession(), 4000, 'tiempo'))?.data?.session || null; }catch{ session = null; }
@@ -455,6 +455,7 @@ async function boot(forceDemo){
       if (error) throw error;
       session = data.session;
     }
+    S.sb = sb; S.anon = !!session.user.is_anonymous; S.email = session.user.email || '';
     S.api = remoteApi(sb, session.user.id);
     await limite(S.api.myName(), 9000, 'La base de datos no responde desde aquí.');
     return start();
@@ -855,8 +856,20 @@ function renderAyuda(){
         <li><span class="grow"><span class="name">Todo es compartido</span><br><span class="small dim">Lo que añade uno lo ven los demás. Nadie de fuera del piso puede ver vuestros datos.</span></span></li>
         <li><span class="grow"><span class="name">Solo tú marcas lo tuyo</span><br><span class="small dim">Tus turnos de limpieza y tu parte de cada factura solo los puedes marcar tú.</span></span></li>
       </ul>
+      ${S.api.kind === 'supabase' ? (S.anon
+        ? `<button class="btn ghost" id="google" style="margin-top:14px;width:100%">Entrar con Google</button>
+           <p class="small dim" style="margin:6px 0 0">Guarda tu cuenta para no perder tu piso si cambias de móvil.</p>`
+        : `<p class="small dim" style="margin-top:14px">Sesión iniciada con Google${S.email ? ': ' + esc(S.email) : ''}.</p>`) : ''}
       <button class="btn" data-go="piso" style="margin-top:14px;width:100%">Entendido, volver al piso</button>
     </section>`;
+  const g = $('#google');
+  if (g) g.onclick = async () => {
+    const redirectTo = location.origin + location.pathname;
+    let { error } = await S.sb.auth.linkIdentity({ provider:'google', options:{ redirectTo } });
+    // Si esa cuenta de Google ya existe (otro móvil), entramos con ella en lugar de enlazar.
+    if (error) ({ error } = await S.sb.auth.signInWithOAuth({ provider:'google', options:{ redirectTo } }));
+    if (error) alert('No se pudo iniciar sesión con Google: ' + error.message);
+  };
 }
 
 /* Facturas periódicas: alta, reparto entre compañeros y pago de tu parte (TEO-34, TEO-31) */
