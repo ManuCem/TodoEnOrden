@@ -102,6 +102,10 @@ button{cursor:pointer}
 .avatar{width:34px;height:34px;padding:0;border-radius:50%;border:2px solid var(--accent);background:var(--accent-soft);
   color:var(--ink);font-weight:800;display:inline-flex;align-items:center;justify-content:center;overflow:hidden;box-shadow:var(--shadow)}
 .avatar img{width:100%;height:100%;object-fit:cover;display:block}
+.mag-dot{overflow:hidden}
+.mag-dot img{width:100%;height:100%;object-fit:cover;display:block}
+.mag-dot.sm{width:26px;height:26px;font-size:12px}
+.mini-m{display:inline-flex;align-items:center;gap:6px;margin:5px 12px 0 0}
 .avatar.big{width:56px;height:56px;font-size:22px;box-shadow:none}
 .perfil-head{display:flex;align-items:center;gap:14px}
 .menu{position:absolute;right:0;top:calc(100% - 4px);z-index:20;min-width:220px;background:var(--paper);border:1px solid var(--line);
@@ -289,10 +293,16 @@ const mc = id => 'm' + (((S.members.findIndex(m => m.id === id) + 6) % 6) + 1);
 /* ---------- capa de datos: Supabase real ---------- */
 function remoteApi(sb, uid){
   const ok = ({data, error}) => { if (error) throw error; return data; };
+  let hayFoto = true; // pasa a false si la columna profiles.avatar_url todavia no existe
   return {
     kind:'supabase', uid,
     async myName(){ const r = ok(await sb.from('profiles').select('full_name').eq('id', uid).maybeSingle()); return r?.full_name || ''; },
     async setName(name){ ok(await sb.from('profiles').update({full_name:name}).eq('id', uid)); },
+    async setAvatar(url){
+      if (!hayFoto) return;
+      const { error } = await sb.from('profiles').update({avatar_url:url}).eq('id', uid);
+      if (error) hayFoto = false;
+    },
     async apartment(){
       const rows = ok(await sb.from('apartment_members').select('apartment_id, apartments(id,name,invite_code)').eq('user_id', uid).limit(1));
       return rows[0]?.apartments || null;
@@ -304,8 +314,10 @@ function remoteApi(sb, uid){
     async createApartment(name){ ok(await sb.rpc('create_apartment',{p_name:name})); },
     async joinApartment(code){ ok(await sb.rpc('join_apartment',{p_code:code})); },
     async members(aptId){
-      const rows = ok(await sb.from('apartment_members').select('user_id, created_at, profiles(full_name)').eq('apartment_id', aptId).order('created_at'));
-      return rows.map(r => ({id:r.user_id, name:r.profiles?.full_name || 'Sin nombre'}));
+      const q = cols => sb.from('apartment_members').select(`user_id, created_at, profiles(${cols})`).eq('apartment_id', aptId).order('created_at');
+      let r = await q(hayFoto ? 'full_name, avatar_url' : 'full_name');
+      if (r.error && hayFoto){ hayFoto = false; r = await q('full_name'); }
+      return ok(r).map(x => ({id:x.user_id, name:x.profiles?.full_name || 'Sin nombre', avatar:x.profiles?.avatar_url || ''}));
     },
     async leave(aptId){ ok(await sb.from('apartment_members').delete().eq('apartment_id', aptId).eq('user_id', uid)); },
     async myBalance(aptId){
@@ -517,6 +529,11 @@ function showConnectionError(e){
 
 async function start(){
   S.me = await S.api.myName();
+  if (S.api.kind === 'supabase' && !S.anon){
+    // Con Google no hace falta escribir el nombre: se usa el de la cuenta (se puede cambiar luego en Piso).
+    if (!S.me && S.nombreG){ try{ await S.api.setName(S.nombreG); S.me = S.nombreG; }catch{} }
+    if (S.avatar) await S.api.setAvatar(S.avatar).catch(() => {}); // para que tus compañeros vean tu foto
+  }
   await refreshApt();
   render();
 }
@@ -556,10 +573,11 @@ function bannerHtml(){
   const lines = urgent.slice(0,3).map(b => `${esc(b.name)} ${dueWords(daysUntil(b.next_due_date))}`).join('. ');
   return `<button class="alert" data-go="facturas"><b>${urgent.length===1?'Una factura vence pronto':urgent.length+' facturas vencen pronto'}</b>${lines}.</button>`;
 }
-function avatarInner(){
-  const ini = esc((S.nombreG || '?').charAt(0).toUpperCase());
-  return S.avatar ? `<img src="${esc(S.avatar)}" alt="" referrerpolicy="no-referrer" onerror="this.replaceWith(document.createTextNode('${ini}'))">` : ini;
-}
+const fotoOInicial = (url, nombre) => url
+  ? `<img src="${esc(url)}" alt="" referrerpolicy="no-referrer" data-i="${esc(initial(nombre))}" onerror="this.replaceWith(this.dataset.i)">`
+  : esc(initial(nombre));
+const avatarInner = () => fotoOInicial(S.avatar, S.nombreG);
+const dotInner = m => fotoOInicial(m.avatar, m.name);
 const GOOGLE_G = '<svg width="16" height="16" viewBox="0 0 48 48" aria-hidden="true"><path fill="#EA4335" d="M24 9.5c3.5 0 6.6 1.2 9.1 3.6l6.8-6.8C35.8 2.4 30.3 0 24 0 14.6 0 6.5 5.4 2.6 13.2l7.9 6.1C12.4 13.6 17.7 9.5 24 9.5z"/><path fill="#4285F4" d="M46.5 24.5c0-1.6-.1-3.1-.4-4.5H24v9h12.7c-.6 3-2.2 5.5-4.7 7.2l7.6 5.9c4.4-4.1 6.9-10.1 6.9-17.6z"/><path fill="#FBBC05" d="M10.5 28.7A14.5 14.5 0 0 1 9.5 24c0-1.6.3-3.2.8-4.7l-7.9-6.1A24 24 0 0 0 0 24c0 3.9.9 7.5 2.6 10.8l7.9-6.1z"/><path fill="#34A853" d="M24 48c6.5 0 11.9-2.1 15.9-5.8l-7.6-5.9c-2.1 1.4-4.9 2.3-8.3 2.3-6.3 0-11.6-4.1-13.5-9.8l-7.9 6.1C6.5 42.6 14.6 48 24 48z"/></svg>';
 async function googleLogin(){
   const redirectTo = location.origin + location.pathname;
@@ -636,7 +654,7 @@ async function renderPerfil(){
       <div class="tiles" aria-label="Código ${esc(a.invite_code.split('').join(' '))}">${tiles}</div>
       <button class="link" data-copy="${esc(a.invite_code)}">Copiar código</button>
       <ul class="list" style="margin-top:10px">
-        ${fila(`Compañeros (${mem.length})`, mem.length ? mem.map(m => esc(m.name) + (m.id === S.api.uid ? ' (tú)' : '')).join(', ') : 'Sin datos')}
+        ${fila(`Compañeros (${mem.length})`, mem.length ? mem.map((m, i) => `<span class="mini-m"><span class="mag-dot mag sm m${(i%6)+1}">${dotInner(m)}</span>${esc(m.name)}${m.id === S.api.uid ? ' (tú)' : ''}</span>`).join('') : 'Sin datos')}
         ${fila('Compra', `${pend} ${pend === 1 ? 'pendiente' : 'pendientes'} · ${items.length - pend} ${items.length - pend === 1 ? 'comprado' : 'comprados'}`)}
         ${fila(`Limpieza (${zones.length} ${zones.length === 1 ? 'zona' : 'zonas'})`, zones.length ? zones.map(z => esc(z.name)).join(', ') : 'Sin zonas todavía')}
         ${fila(`Facturas (${bills.length})`, bills.length
@@ -667,11 +685,14 @@ async function renderPerfil(){
 /* Sin piso: nombre + crear o unirse (TEO-8) */
 function renderOnboarding(){
   app.innerHTML = `${header('Tu piso, en orden')}
-    <section class="sec">
+    ${S.me && !S.anon ? `<section class="sec perfil-head">
+      <span class="avatar big">${avatarInner()}</span>
+      <span class="grow"><span class="name">Entrarás como ${esc(S.me)}</span><br><span class="small dim">Es el nombre de tu cuenta de Google. Podrás cambiarlo después en Piso.</span></span>
+    </section>` : `<section class="sec">
       <h2>¿Cómo te llamas?</h2>
       <p class="sub">Es el nombre que verán tus compañeros.</p>
       <label>Tu nombre<input id="myName" maxlength="40" autocomplete="given-name" value="${esc(S.me)}" placeholder="Marta"></label>
-    </section>
+    </section>`}
     <section class="sec">
       <h2>Crear un piso</h2>
       <p class="sub">Recibes un código de 6 letras para invitar a tus compañeros.</p>
@@ -689,6 +710,7 @@ function renderOnboarding(){
       </form>
     </section>`;
   const ensureName = async () => {
+    if (!$('#myName')) return true;
     const n = $('#myName').value.trim();
     if (!n){ toast('Escribe primero tu nombre.'); $('#myName').focus(); return false; }
     if (n !== S.me){ await S.api.setName(n); S.me = n; }
@@ -725,7 +747,7 @@ async function renderPiso(){
     <section class="sec">
       <div class="sec-head"><h2>Compañeros</h2><span class="count">${S.members.length}</span></div>
       <ul class="list">${S.members.map(m => `
-        <li><span class="mag-dot mag ${mc(m.id)}">${esc(initial(m.name))}</span>
+        <li><span class="mag-dot mag ${mc(m.id)}">${dotInner(m)}</span>
           <span class="grow name">${esc(m.name)}</span>
           ${m.id===S.api.uid ? '<span class="you">Tú</span>' : ''}</li>`).join('')}</ul>
     </section>
