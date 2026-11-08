@@ -102,6 +102,9 @@ button{cursor:pointer}
 .avatar{width:34px;height:34px;padding:0;border-radius:50%;border:2px solid var(--accent);background:var(--accent-soft);
   color:var(--ink);font-weight:800;display:inline-flex;align-items:center;justify-content:center;overflow:hidden;box-shadow:var(--shadow)}
 .avatar img{width:100%;height:100%;object-fit:cover;display:block}
+.chip.persona{display:inline-flex;align-items:center;gap:8px;padding:3px 13px 3px 3px;font-size:14px}
+.chip.persona .cf{width:32px;height:32px;margin:0;vertical-align:baseline;flex:none}
+.cfi{display:grid;place-items:center;border-radius:50%;background:rgba(255,255,255,.3);font-weight:850}
 .chip .cf{width:18px;height:18px;border-radius:50%;object-fit:cover;vertical-align:-4px;margin-right:6px}
 .mag-dot{overflow:hidden}
 .mag-dot img{width:100%;height:100%;object-fit:cover;display:block}
@@ -616,8 +619,11 @@ const fotoOInicial = (url, nombre) => url
 const nombreVisible = () => S.me || S.nombreG || 'Mi cuenta';
 const avatarInner = () => fotoOInicial(S.myAvatar || S.avatar, nombreVisible());
 const dotInner = m => fotoOInicial(m.avatar, m.name);
-const fotoChip = id => { const m = S.members.find(x => x.id === id);
-  return m && m.avatar ? `<img class="cf" src="${esc(m.avatar)}" alt="" referrerpolicy="no-referrer" onerror="this.remove()">` : ''; };
+const fotoChip = (id, grande) => { const m = S.members.find(x => x.id === id);
+  if (!m) return '';
+  return m.avatar ? `<img class="cf" src="${esc(m.avatar)}" alt="" referrerpolicy="no-referrer" onerror="this.remove()">`
+    : grande ? `<span class="cf cfi">${esc(initial(m.name))}</span>` : ''; };
+const quienChip = (id, nombre) => id === S.api.uid ? `${esc(S.me || nombre)} (tú)` : esc(nombre);
 const GOOGLE_G = '<svg width="16" height="16" viewBox="0 0 48 48" aria-hidden="true"><path fill="#EA4335" d="M24 9.5c3.5 0 6.6 1.2 9.1 3.6l6.8-6.8C35.8 2.4 30.3 0 24 0 14.6 0 6.5 5.4 2.6 13.2l7.9 6.1C12.4 13.6 17.7 9.5 24 9.5z"/><path fill="#4285F4" d="M46.5 24.5c0-1.6-.1-3.1-.4-4.5H24v9h12.7c-.6 3-2.2 5.5-4.7 7.2l7.6 5.9c4.4-4.1 6.9-10.1 6.9-17.6z"/><path fill="#FBBC05" d="M10.5 28.7A14.5 14.5 0 0 1 9.5 24c0-1.6.3-3.2.8-4.7l-7.9-6.1A24 24 0 0 0 0 24c0 3.9.9 7.5 2.6 10.8l7.9-6.1z"/><path fill="#34A853" d="M24 48c6.5 0 11.9-2.1 15.9-5.8l-7.6-5.9c-2.1 1.4-4.9 2.3-8.3 2.3-6.3 0-11.6-4.1-13.5-9.8l-7.9 6.1C6.5 42.6 14.6 48 24 48z"/></svg>';
 async function googleLogin(){
   const redirectTo = location.origin + location.pathname;
@@ -1054,7 +1060,7 @@ function historicoHtml(hist, currentWeek){
     ${weeks.map(w => { const mon = new Date(w.week+'T00:00:00'); const cur = w.week === currentWeek; const past = w.week < currentWeek;
       return `<h3 class="wk">${cur ? 'Esta semana' : 'Semana del'} ${esc(weekRange(mon))}</h3>
       <ul class="list">${w.rows.map(h => `<li><span class="grow"><span class="name">${esc(h.zone)}</span>
-        <span class="meta-line"><span class="chip mag ${mc(h.user_id)}">${fotoChip(h.user_id)}${h.user_id === S.api.uid ? 'Tú' : esc(h.name)}</span>
+        <span class="meta-line"><span class="chip mag persona ${mc(h.user_id)}">${fotoChip(h.user_id, 1)}${quienChip(h.user_id, h.name)}</span>
         ${h.is_done ? `<span class="state ok">✔ Completada · ${esc(fmtDoneAt(h.done_at))}</span>` : `<span class="state ${past?'late':''}">${past?'No hecha':'Pendiente'}</span>`}</span></span></li>`).join('')}</ul>`; }).join('')}
   </section>`;
 }
@@ -1079,7 +1085,7 @@ async function renderLimpieza(){
       <ul class="list">${asg.length ? asg.map(a => { const mine = a.user_id === S.api.uid; return `
         <li><button class="check" aria-pressed="${a.is_done}" data-a="${a.id}" ${mine?'':'disabled'} aria-label="${esc(a.zone)}: ${a.is_done?'hecha':'pendiente'}">${CHECK}</button>
           <span class="grow"><span class="name ${a.is_done?'done':''}">${esc(a.zone)}</span>
-            <span class="meta-line"><span class="chip mag ${mc(a.user_id)}">${fotoChip(a.user_id)}${mine?'Te toca a ti':esc(a.name)}</span>
+            <span class="meta-line"><span class="chip mag persona ${mc(a.user_id)}">${fotoChip(a.user_id, 1)}${quienChip(a.user_id, a.name)}</span>
               <span class="state ${a.is_done?'ok':''}">${a.is_done ? esc(doneLabel(a.done_at)) : 'Pendiente'}</span></span></span></li>`; }).join('')
         : `<li class="empty">${S.members.length < 2 ? esc(SOLO_UNO) : (zones.length ? 'Todavía no hay reparto esta semana. Recarga la página.' : 'Define las zonas de la casa y aquí aparecerá quién limpia cada una.')}</li>`}</ul>
     </section>
