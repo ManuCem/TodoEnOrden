@@ -311,6 +311,7 @@ function remoteApi(sb, uid){
       return rows.map(r => ({id:r.id,user_id:r.user_id,week:r.week_start,is_done:r.is_done,done_at:r.done_at,zone:r.cleaning_zones?.name || '—',name:r.profiles?.full_name || 'Sin nombre'}))
         .sort((a,b)=> b.week.localeCompare(a.week) || a.zone.localeCompare(b.zone,'es'));
     },
+    async weekStart(){ return ok(await sb.rpc('current_week_start')); },
     async setDone(id,v){
       const rows = ok(await sb.from('cleaning_assignments').update({is_done:v}).eq('id', id).select('id'));
       if (!rows.length) throw new Error('Solo puedes marcar tus propias tareas.');
@@ -391,10 +392,12 @@ function demoApi(clave){
     addZone:(a,name)=>{ if (db.zones.some(z=>z.name.toLowerCase()===name.toLowerCase())) return Promise.reject({code:'23505',message:'dup'}); db.zones.push({id:id('z'),name}); return wait(); },
     delZone:i=>{ db.zones=db.zones.filter(x=>x.id!==i); return wait(); },
     assignments:(a,week)=>{
+      if (db.members.length < 2) return wait([]);
       const wk = Math.floor((new Date(week+'T00:00:00') - new Date('2000-01-03T00:00:00'))/(7*864e5));
       return wait(db.zones.map((z,i)=>{ const m = db.members[(i+wk)%db.members.length]; const k = z.id+week;
         return {id:k,user_id:m.id,is_done:!!db.done[k],done_at:db.done[k]||null,zone:z.name,name:m.name}; }));
     },
+    weekStart:()=>wait(iso(mondayOf())),
     history:(a,fromWeek)=>{
       const out = []; const base = mondayOf();
       for (let k=0;k<6;k++){
@@ -591,7 +594,9 @@ function renderOnboarding(){
 async function renderPiso(){
   const apt = S.apt;
   let asg = null;
-  try{ asg = await S.api.assignments(apt.id, iso(mondayOf())); }catch{ asg = null; }
+  const [, mem] = await Promise.all([loadWeek(), S.api.members(apt.id).catch(() => null)]);
+  if (mem) S.members = mem;
+  try{ asg = await S.api.assignments(apt.id, iso(curMonday())); }catch{ asg = null; }
   if (S.tab !== 'piso' || S.apt !== apt) return;
   const tiles = apt.invite_code.split('').map((c,i) => `<span class="tile mag m${(i%6)+1}">${esc(c)}</span>`).join('');
   app.innerHTML = `${header(apt.name)}${turnoHtml(asg)}
@@ -718,6 +723,12 @@ async function renderCompra(){
 }
 
 /* Limpieza: recordatorio del turno e histórico */
+// La semana actual la decide el servidor (hora de Madrid), no el reloj del móvil
+const curMonday = () => new Date(S.mon || mondayOf());
+async function loadWeek(){
+  try{ S.mon = new Date((await S.api.weekStart()) + 'T00:00:00'); if (isNaN(S.mon)) S.mon = null; }catch{ S.mon = null; }
+}
+const SOLO_UNO = 'Hacen falta al menos 2 compañeros para rotar los turnos. Cuando se una alguien, la rotación empezará sola.';
 function fmtDoneAt(when){
   const d = new Date(when); if (isNaN(d)) return '';
   return d.toLocaleDateString('es-ES',{weekday:'short',day:'numeric',month:'short'}) + ', ' + d.toLocaleTimeString('es-ES',{hour:'2-digit',minute:'2-digit'});
@@ -727,7 +738,7 @@ function weekRange(mon){
   return `${mon.toLocaleDateString('es-ES',{day:'numeric',month:'short'})} – ${end.toLocaleDateString('es-ES',{day:'numeric',month:'short'})}`;
 }
 function plazoWords(){
-  const end = new Date(mondayOf()); end.setDate(end.getDate()+6);
+  const end = new Date(curMonday()); end.setDate(end.getDate()+6);
   const f = end.toLocaleDateString('es-ES',{weekday:'long',day:'numeric',month:'long'}).replace(',','');
   const n = daysUntil(iso(end));
   if (n <= 0) return `Plazo: hoy, ${f}. Es el último día.`;
@@ -735,7 +746,8 @@ function plazoWords(){
 }
 function turnoHtml(asg){
   if (!asg) return '';
-  const range = weekRange(mondayOf());
+  const range = weekRange(curMonday());
+  if (S.members.length < 2) return `<section class="turno vacio" aria-live="polite"><div class="turno-top"><b>Tu turno de limpieza</b></div><p>${esc(SOLO_UNO)}</p></section>`;
   if (!asg.length) return `<section class="turno vacio" aria-live="polite"><div class="turno-top"><b>Tu turno de limpieza</b></div>
     <p>Todavía no hay rotación esta semana. Define las zonas del piso y se generará sola.</p><button class="link" data-go="limpieza">Ir a Limpieza</button></section>`;
   const mine = asg.filter(a => a.user_id === S.api.uid);
@@ -777,25 +789,29 @@ function historicoHtml(hist, currentWeek){
   </section>`;
 }
 async function renderLimpieza(){
-  const week = iso(mondayOf());
+  const [, mem] = await Promise.all([loadWeek(), S.api.members(S.apt.id).catch(() => null)]);
+  if (mem) S.members = mem;
+  const week = iso(curMonday());
   const [zones, asg] = await Promise.all([S.api.zones(S.apt.id), S.api.assignments(S.apt.id, week)]);
-  const from = mondayOf(); from.setDate(from.getDate()-7*7);
+  const descansan = asg.length ? S.members.filter(m => !asg.some(a => a.user_id === m.id)).map(m => m.id === S.api.uid ? 'tú' : m.name) : [];
+  const from = curMonday(); from.setDate(from.getDate()-7*7);
   let hist = [];
   try{ hist = await S.api.history(S.apt.id, iso(from)); }catch{ hist = null; }
   const done = asg.filter(a => a.is_done).length;
-  const end = new Date(mondayOf()); end.setDate(end.getDate()+6);
-  const range = `${mondayOf().toLocaleDateString('es-ES',{day:'numeric',month:'short'})} – ${end.toLocaleDateString('es-ES',{day:'numeric',month:'short'})}`;
+  const end = new Date(curMonday()); end.setDate(end.getDate()+6);
+  const range = `${curMonday().toLocaleDateString('es-ES',{day:'numeric',month:'short'})} – ${end.toLocaleDateString('es-ES',{day:'numeric',month:'short'})}`;
   app.innerHTML = `${header('Limpieza')}
     <section class="sec">
       <div class="sec-head"><h2>Esta semana</h2><span class="count">${done} de ${asg.length} hechas</span></div>
-      <p class="sub">Semana del ${esc(range)}. Cada semana las zonas pasan al siguiente compañero.</p>
+      <p class="sub">Semana del ${esc(range)}. Cada lunes las zonas pasan al compañero anterior de la lista y nadie repite la zona de la semana pasada. El reparto se genera la primera vez que alguien abre la app esa semana.</p>
+      ${descansan.length ? `<p class="sub" style="margin-top:-4px">Sin zona esta semana: <b>${esc(descansan.join(', '))}</b>. El descanso también va rotando.</p>` : ''}
       ${asg.length ? `<div class="seg" aria-hidden="true">${asg.map(a => `<i class="${a.is_done?'on '+mc(a.user_id):''}"></i>`).join('')}</div>` : ''}
       <ul class="list">${asg.length ? asg.map(a => { const mine = a.user_id === S.api.uid; return `
         <li><button class="check" aria-pressed="${a.is_done}" data-a="${a.id}" ${mine?'':'disabled'} aria-label="${esc(a.zone)}: ${a.is_done?'hecha':'pendiente'}">${CHECK}</button>
           <span class="grow"><span class="name ${a.is_done?'done':''}">${esc(a.zone)}</span>
             <span class="meta-line"><span class="chip mag ${mc(a.user_id)}">${mine?'Te toca a ti':esc(a.name)}</span>
               <span class="state ${a.is_done?'ok':''}">${a.is_done ? esc(doneLabel(a.done_at)) : 'Pendiente'}</span></span></span></li>`; }).join('')
-        : '<li class="empty">Define las zonas de la casa y aquí aparecerá quién limpia cada una.</li>'}</ul>
+        : `<li class="empty">${S.members.length < 2 ? esc(SOLO_UNO) : (zones.length ? 'Todavía no hay reparto esta semana. Recarga la página.' : 'Define las zonas de la casa y aquí aparecerá quién limpia cada una.')}</li>`}</ul>
     </section>
     <section class="sec">
       <h2>Zonas de limpieza</h2>
