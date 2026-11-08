@@ -202,6 +202,28 @@ input.invalid,select.invalid{border-color:var(--bad)}
 .alert{display:block;width:100%;text-align:left;margin:16px 0 0;padding:12px 14px;border:1.5px solid var(--m2);
   border-radius:12px;background:var(--alert-bg);color:var(--alert-ink);font-size:15px;font-weight:600;box-shadow:var(--shadow)}
 .alert b{display:block;font-weight:900;margin-bottom:2px}
+.turno{margin:16px 0 0;padding:14px;border:1.5px solid var(--m2);border-radius:12px;background:var(--alert-bg);color:var(--alert-ink);box-shadow:var(--shadow)}
+.turno.ok{background:#E2F2E9;color:#14422B;border-color:#5B9A81}
+.turno.vacio{background:var(--paper);color:var(--ink);border-color:var(--line)}
+.turno-top{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.turno-top b{font-weight:900;font-size:17px}
+.turno .badge{font-size:13px;font-weight:900;padding:2px 10px;border-radius:99px;background:var(--alert-ink);color:var(--alert-bg);white-space:nowrap}
+.turno.ok .badge{background:#14422B;color:#E2F2E9}
+.turno p{margin:6px 0 0;font-size:15px}
+.turno ul{list-style:none;margin:10px 0 0;padding:0;display:grid;gap:8px}
+.turno li{display:flex;align-items:center;justify-content:space-between;gap:10px;font-size:15px}
+.turno li span{min-width:0}
+.turno li strong{display:block;font-weight:900}
+.turno .btn{min-height:40px;padding:6px 14px;font-size:15px;background:var(--alert-ink);border-color:var(--alert-ink);color:var(--alert-bg)}
+.turno .plazo{font-weight:800}
+.turno .link{color:inherit}
+@media (prefers-color-scheme: dark){ :root:not([data-theme="light"]) .turno.ok{background:#16302A;color:#BDEBD3;border-color:#4C8A70}
+  :root:not([data-theme="light"]) .turno.ok .badge{background:#BDEBD3;color:#16302A} }
+:root[data-theme="dark"] .turno.ok{background:#16302A;color:#BDEBD3;border-color:#4C8A70}
+:root[data-theme="dark"] .turno.ok .badge{background:#BDEBD3;color:#16302A}
+.state.late{border-color:var(--bad);color:var(--bad)}
+.wk{margin:18px 0 2px;font-size:14px;font-weight:900;color:var(--accent)}
+.cumple{display:flex;flex-wrap:wrap;gap:6px;margin:4px 0 0}
 .list.receipt li.urgent{background:var(--alert-bg);border-radius:12px;padding-left:12px;padding-right:12px;margin:4px -12px;border-top-color:transparent}
 .list.receipt li.urgent+li{border-top-color:transparent}
 .toast{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(94px + env(safe-area-inset-bottom,0px));z-index:9;
@@ -283,6 +305,11 @@ function remoteApi(sb, uid){
       ok(await sb.rpc('ensure_week_assignments',{p_apartment_id:aptId,p_week_start:week}));
       const rows = ok(await sb.from('cleaning_assignments').select('id,user_id,is_done,done_at,cleaning_zones(name),profiles(full_name)').eq('apartment_id', aptId).eq('week_start', week));
       return rows.map(r => ({id:r.id,user_id:r.user_id,is_done:r.is_done,done_at:r.done_at,zone:r.cleaning_zones?.name || '—',name:r.profiles?.full_name || 'Sin nombre'})).sort((a,b)=>a.zone.localeCompare(b.zone,'es'));
+    },
+    async history(aptId, fromWeek){
+      const rows = ok(await sb.from('cleaning_assignments').select('id,user_id,week_start,is_done,done_at,cleaning_zones(name),profiles(full_name)').eq('apartment_id', aptId).gte('week_start', fromWeek).order('week_start',{ascending:false}).limit(300));
+      return rows.map(r => ({id:r.id,user_id:r.user_id,week:r.week_start,is_done:r.is_done,done_at:r.done_at,zone:r.cleaning_zones?.name || '—',name:r.profiles?.full_name || 'Sin nombre'}))
+        .sort((a,b)=> b.week.localeCompare(a.week) || a.zone.localeCompare(b.zone,'es'));
     },
     async setDone(id,v){
       const rows = ok(await sb.from('cleaning_assignments').update({is_done:v}).eq('id', id).select('id'));
@@ -367,6 +394,19 @@ function demoApi(clave){
       const wk = Math.floor((new Date(week+'T00:00:00') - new Date('2000-01-03T00:00:00'))/(7*864e5));
       return wait(db.zones.map((z,i)=>{ const m = db.members[(i+wk)%db.members.length]; const k = z.id+week;
         return {id:k,user_id:m.id,is_done:!!db.done[k],done_at:db.done[k]||null,zone:z.name,name:m.name}; }));
+    },
+    history:(a,fromWeek)=>{
+      const out = []; const base = mondayOf();
+      for (let k=0;k<6;k++){
+        const ws = new Date(base); ws.setDate(ws.getDate()-7*k); const week = iso(ws);
+        if (week < fromWeek) break;
+        const wk = Math.floor((new Date(week+'T00:00:00') - new Date('2000-01-03T00:00:00'))/(7*864e5));
+        db.zones.forEach((z,i)=>{ const m = db.members[(i+wk)%db.members.length]; const key = z.id+week;
+          let done_at = db.done[key] || null;
+          if (k>0 && !(key in db.done) && (i*7+k*3)%5!==0){ const d = new Date(ws); d.setDate(d.getDate()+((i+k)%5)+1); d.setHours(9+((i*3+k)%11),(i*17)%60,0,0); done_at = d.toISOString(); }
+          out.push({id:key,user_id:m.id,week,is_done:!!done_at,done_at,zone:z.name,name:m.name}); });
+      }
+      return wait(out.sort((a,b)=> b.week.localeCompare(a.week) || a.zone.localeCompare(b.zone,'es')));
     },
     setDone:(i,v)=>{ db.done[i]= v ? new Date().toISOString() : null; return wait(); },
     bills:()=>wait(db.bills.filter(b=>!b.is_paused).sort((a,b)=>a.next_due_date.localeCompare(b.next_due_date)||a.name.localeCompare(b.name,'es'))),
@@ -490,7 +530,7 @@ async function render(){
   try{
     if (S.tab !== 'facturas'){ try{ S.bills = await S.api.bills(S.apt.id); }catch{ S.bills = []; } }
     if (S.tab==='ayuda') renderAyuda();
-    else if (S.tab==='piso') renderPiso();
+    else if (S.tab==='piso') await renderPiso();
     else if (S.tab==='compra') await renderCompra();
     else if (S.tab==='limpieza') await renderLimpieza();
     else await renderFacturas();
@@ -548,10 +588,13 @@ function renderOnboarding(){
 }
 
 /* Piso: código, compañeros, cambiar nombre, salir (TEO-10, TEO-12) */
-function renderPiso(){
+async function renderPiso(){
   const apt = S.apt;
+  let asg = null;
+  try{ asg = await S.api.assignments(apt.id, iso(mondayOf())); }catch{ asg = null; }
+  if (S.tab !== 'piso' || S.apt !== apt) return;
   const tiles = apt.invite_code.split('').map((c,i) => `<span class="tile mag m${(i%6)+1}">${esc(c)}</span>`).join('');
-  app.innerHTML = `${header(apt.name)}
+  app.innerHTML = `${header(apt.name)}${turnoHtml(asg)}
     <section class="sec">
       <h2>Código del piso</h2>
       <p class="sub">Compártelo con quien vaya a vivir aquí.</p>
@@ -581,6 +624,10 @@ function renderPiso(){
         <div class="row"><button class="btn danger small" id="leaveYes" hidden>Sí, salir</button><button class="btn ghost small" id="leaveNo">Cancelar</button></div>
       </div>
     </section>`;
+  app.querySelectorAll('[data-turno]').forEach(b => b.onclick = async () => {
+    b.disabled = true;
+    try{ await S.api.setDone(b.dataset.turno, true); await renderPiso(); toast('Tarea marcada como hecha.'); }catch(err){ b.disabled = false; toast(friendly(err)); }
+  });
   $('#copyCode').onclick = async () => {
     try{ await navigator.clipboard.writeText(apt.invite_code); toast('Código copiado.'); }
     catch{ toast('Copia el código a mano: ' + apt.invite_code); }
@@ -670,6 +717,39 @@ async function renderCompra(){
   }
 }
 
+/* Limpieza: recordatorio del turno e histórico */
+function fmtDoneAt(when){
+  const d = new Date(when); if (isNaN(d)) return '';
+  return d.toLocaleDateString('es-ES',{weekday:'short',day:'numeric',month:'short'}) + ', ' + d.toLocaleTimeString('es-ES',{hour:'2-digit',minute:'2-digit'});
+}
+function weekRange(mon){
+  const end = new Date(mon); end.setDate(end.getDate()+6);
+  return `${mon.toLocaleDateString('es-ES',{day:'numeric',month:'short'})} – ${end.toLocaleDateString('es-ES',{day:'numeric',month:'short'})}`;
+}
+function plazoWords(){
+  const end = new Date(mondayOf()); end.setDate(end.getDate()+6);
+  const f = end.toLocaleDateString('es-ES',{weekday:'long',day:'numeric',month:'long'}).replace(',','');
+  const n = daysUntil(iso(end));
+  if (n <= 0) return `Plazo: hoy, ${f}. Es el último día.`;
+  return `Plazo: ${f}. ${n===1?'Queda 1 día':'Quedan '+n+' días'}.`;
+}
+function turnoHtml(asg){
+  if (!asg) return '';
+  const range = weekRange(mondayOf());
+  if (!asg.length) return `<section class="turno vacio" aria-live="polite"><div class="turno-top"><b>Tu turno de limpieza</b></div>
+    <p>Todavía no hay rotación esta semana. Define las zonas del piso y se generará sola.</p><button class="link" data-go="limpieza">Ir a Limpieza</button></section>`;
+  const mine = asg.filter(a => a.user_id === S.api.uid);
+  if (!mine.length) return `<section class="turno vacio" aria-live="polite"><div class="turno-top"><b>Esta semana no tienes turno</b></div>
+    <p>No se te ha asignado ninguna zona (semana del ${esc(range)}). No tienes que hacer nada.</p></section>`;
+  const hechas = mine.filter(a => a.is_done).length, todo = hechas === mine.length;
+  return `<section class="turno ${todo?'ok':''}" aria-live="polite">
+    <div class="turno-top"><b>Tu turno de limpieza</b><span class="badge">${todo?'Completada':(mine.length>1?hechas+' de '+mine.length+' hechas':'Pendiente')}</span></div>
+    <p>${esc(S.me || 'Tú')} · semana del ${esc(range)}</p>
+    <ul>${mine.map(a => `<li><span><strong>${esc(a.zone)}</strong>${a.is_done ? '✔ Completada el ' + esc(fmtDoneAt(a.done_at)) : 'Pendiente'}</span>
+      ${a.is_done ? '' : `<button class="btn small" data-turno="${a.id}">Hecha</button>`}</li>`).join('')}</ul>
+    ${todo ? '' : `<p class="plazo">${esc(plazoWords())}</p>`}</section>`;
+}
+
 /* Limpieza: zonas y marcar hecha (TEO-16, TEO-15) */
 function doneLabel(when){
   if (!when) return 'Hecha';
@@ -677,9 +757,31 @@ function doneLabel(when){
   if (isNaN(d)) return 'Hecha';
   return 'Hecha el ' + d.toLocaleDateString('es-ES',{weekday:'short',day:'numeric'});
 }
+function historicoHtml(hist, currentWeek){
+  if (hist === null) return `<section class="sec"><h2>Histórico de limpieza</h2><p class="sub">No se ha podido cargar el histórico. Prueba a actualizar.</p><button class="btn ghost small" id="histRefresh">Actualizar</button></section>`;
+  if (!hist.length) return `<section class="sec"><div class="sec-head"><h2>Histórico de limpieza</h2><button class="link" id="histRefresh">Actualizar</button></div>
+    <p class="sub">Aún no hay turnos registrados. Cuando pase la primera semana verás aquí quién ha cumplido.</p></section>`;
+  const weeks = []; hist.forEach(h => { let w = weeks.find(x => x.week === h.week); if (!w){ w = {week:h.week, rows:[]}; weeks.push(w); } w.rows.push(h); });
+  const cumple = new Map();
+  hist.filter(h => h.week < currentWeek).forEach(h => { const c = cumple.get(h.user_id) || {name:h.name,hechas:0,total:0}; c.total++; if (h.is_done) c.hechas++; cumple.set(h.user_id, c); });
+  const chips = [...cumple.entries()].map(([id,c]) => `<span class="chip mag ${mc(id)}">${esc(c.name)}: ${c.hechas} de ${c.total} (${Math.round(100*c.hechas/c.total)} %)</span>`).join('');
+  return `<section class="sec" id="hist">
+    <div class="sec-head"><h2>Histórico de limpieza</h2><button class="link" id="histRefresh">Actualizar</button></div>
+    <p class="sub">Los turnos de todos los compañeros, de la semana más reciente a la más antigua.</p>
+    ${chips ? `<p class="sub" style="margin:0 0 4px">Cumplimiento de las semanas ya cerradas:</p><div class="cumple">${chips}</div>` : ''}
+    ${weeks.map(w => { const mon = new Date(w.week+'T00:00:00'); const cur = w.week === currentWeek; const past = w.week < currentWeek;
+      return `<h3 class="wk">${cur ? 'Esta semana' : 'Semana del'} ${esc(weekRange(mon))}</h3>
+      <ul class="list">${w.rows.map(h => `<li><span class="grow"><span class="name">${esc(h.zone)}</span>
+        <span class="meta-line"><span class="chip mag ${mc(h.user_id)}">${h.user_id === S.api.uid ? 'Tú' : esc(h.name)}</span>
+        ${h.is_done ? `<span class="state ok">✔ Completada · ${esc(fmtDoneAt(h.done_at))}</span>` : `<span class="state ${past?'late':''}">${past?'No hecha':'Pendiente'}</span>`}</span></span></li>`).join('')}</ul>`; }).join('')}
+  </section>`;
+}
 async function renderLimpieza(){
   const week = iso(mondayOf());
   const [zones, asg] = await Promise.all([S.api.zones(S.apt.id), S.api.assignments(S.apt.id, week)]);
+  const from = mondayOf(); from.setDate(from.getDate()-7*7);
+  let hist = [];
+  try{ hist = await S.api.history(S.apt.id, iso(from)); }catch{ hist = null; }
   const done = asg.filter(a => a.is_done).length;
   const end = new Date(mondayOf()); end.setDate(end.getDate()+6);
   const range = `${mondayOf().toLocaleDateString('es-ES',{day:'numeric',month:'short'})} – ${end.toLocaleDateString('es-ES',{day:'numeric',month:'short'})}`;
@@ -701,7 +803,9 @@ async function renderLimpieza(){
       <form class="row" id="fZone"><input id="zoneName" maxlength="40" placeholder="Baño, cocina, salón…" aria-label="Nueva zona" required><button class="btn" type="submit">Añadir</button></form>
       <ul class="list" style="margin-top:6px">${zones.map(z => `
         <li><span class="grow name">${esc(z.name)}</span><button class="x" data-z="${z.id}" aria-label="Quitar ${esc(z.name)}">${CROSS}</button></li>`).join('')}</ul>
-    </section>`;
+    </section>
+    ${historicoHtml(hist, week)}`;
+  const hr = $('#histRefresh'); if (hr) hr.onclick = async () => { hr.disabled = true; try{ await renderLimpieza(); toast('Histórico actualizado.'); }catch(err){ toast(friendly(err)); } };
   $('#fZone').onsubmit = e => run(e, async () => { await S.api.addZone(S.apt.id, $('#zoneName').value.trim()); await renderLimpieza(); });
   app.querySelectorAll('[data-z]').forEach(b => b.onclick = async () => {
     try{ await S.api.delZone(b.dataset.z); await renderLimpieza(); }catch(err){ toast(friendly(err)); }
@@ -715,7 +819,7 @@ async function renderLimpieza(){
 const PASOS = [
   ['1','Crea tu piso o únete','Quien monta el piso recibe un código de 6 letras. Los demás lo escriben una vez y ya están dentro. Todos veis lo mismo al instante.'],
   ['2','Apuntad la compra','Cualquiera añade lo que falta en casa. Quien va al súper lo va tachando, y al lado queda su nombre para que se sepa quién ha ido.'],
-  ['3','Repartid la limpieza','Definís las zonas una vez y la app reparte los turnos cada semana, rotando para que no le toque siempre lo mismo a la misma persona. Cada uno marca su tarea cuando la hace.'],
+  ['3','Repartid la limpieza','Definís las zonas una vez y la app reparte los turnos cada semana, rotando para que no le toque siempre lo mismo a la misma persona. Cada uno marca su tarea cuando la hace. Al abrir la app, una tarjeta te recuerda tu turno y el plazo, y en Limpieza tienes el histórico de quién ha cumplido.'],
   ['4','Controlad las facturas','Dad de alta la luz, el agua o el internet con su importe y cada cuánto se repiten. La app os avisa de los vencimientos, divide el importe entre los del piso y cada uno marca cuando ha pagado su parte.'],
   ['5','Compartid el enlace','La app se abre desde el navegador del móvil, sin instalar nada. Pásale el enlace a tus compañeros.']
 ];
