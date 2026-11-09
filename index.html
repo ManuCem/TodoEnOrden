@@ -482,9 +482,13 @@ function remoteApi(sb, uid){
       const r = ok(await sb.from('apartment_balances').select('balance').eq('apartment_id', aptId).eq('user_id', uid).maybeSingle());
       return Number(r?.balance ?? 0);
     },
-    async items(aptId){ return ok(await sb.from('shopping_items').select('id,name,is_bought,created_at').eq('apartment_id', aptId).order('is_bought').order('created_at',{ascending:false})); },
+    async items(aptId){ return ok(await sb.from('shopping_items').select('id,name,is_bought,created_at,bought_by,bought_at').eq('apartment_id', aptId).order('is_bought').order('created_at',{ascending:false})); },
     async addItem(aptId,name){ ok(await sb.from('shopping_items').insert({apartment_id:aptId,name})); },
-    async setBought(id,v){ ok(await sb.from('shopping_items').update({is_bought:v}).eq('id', id)); },
+    // TEO-19: tachar (true) o destachar (false). Quién y cuándo lo guarda un trigger de la base de datos.
+    async setBought(id,v){
+      const rows = ok(await sb.from('shopping_items').update({is_bought:v}).eq('id', id).select('id'));
+      if (!rows || !rows.length) throw new Error('Ese producto ya no está en la lista.');
+    },
     async delItem(id){ ok(await sb.from('shopping_items').delete().eq('id', id)); },
     async renameItem(id,name){ ok(await sb.from('shopping_items').update({name}).eq('id', id)); },
     async zones(aptId){ return ok(await sb.from('cleaning_zones').select('id,name').eq('apartment_id', aptId).order('created_at')); },
@@ -563,7 +567,8 @@ function demoApi(clave){
     myName: P.miembros[0],
     apt: { id:'apt-'+pisoDemo, name:P.nombre, invite_code:P.code },
     members: P.miembros.map((n,i) => ({ id:uid(i), name:n })),
-    items: P.compra.map(([name,b,dias],i) => ({ id:'i'+i, name, is_bought:!!b, created_at:new Date(Date.now()-(dias||0)*864e5 - i*36e5).toISOString() })),
+    items: P.compra.map(([name,b,dias],i) => ({ id:'i'+i, name, is_bought:!!b, created_at:new Date(Date.now()-(dias||0)*864e5 - i*36e5).toISOString(),
+      bought_by: b ? uid(i % P.miembros.length) : null, bought_at: b ? new Date(Math.min(Date.now()-6e5, Date.now()-(dias||0)*864e5 - i*36e5 + 72e5)).toISOString() : null })),
     zones: P.zonas.map((name,i) => ({ id:'z'+i, name })),
     done: {},
     bills: P.facturas.map(([name,amount,frequency,dias,quien,pausada],i) => ({
@@ -601,7 +606,9 @@ function demoApi(clave){
     myBalance:()=>wait(P.saldo),
     items:()=>wait(db.items.slice().sort((a,b)=>a.is_bought-b.is_bought || b.created_at.localeCompare(a.created_at))),
     addItem:(a,name)=>{ if (db.items.some(i=>i.name.toLowerCase()===name.toLowerCase())) return Promise.reject({code:'23505',message:'dup'}); db.items.push({id:id('i'),name,is_bought:false,created_at:new Date().toISOString()}); return wait(); },
-    setBought:(i,v)=>{ db.items.find(x=>x.id===i).is_bought=v; return wait(); },
+    setBought:(i,v)=>{ const x = db.items.find(y=>y.id===i); if (!x) return Promise.reject(new Error('Ese producto ya no está en la lista.'));
+      if (v && !x.is_bought){ x.bought_by = me; x.bought_at = new Date().toISOString(); } if (!v){ x.bought_by = null; x.bought_at = null; }
+      x.is_bought = v; return wait(); },
     delItem:i=>{ db.items=db.items.filter(x=>x.id!==i); return wait(); },
     renameItem:(i,name)=>{ if (db.items.some(x=>x.id!==i && x.name.toLowerCase()===name.toLowerCase())) return Promise.reject({code:'23505',message:'dup'}); db.items.find(x=>x.id===i).name=name; return wait(); },
     zones:()=>wait(db.zones.slice()),
@@ -1210,6 +1217,13 @@ async function renderPiso(){
 }
 
 /* Compra común, agrupada por el día en que se añadió (TEO-11) */
+function quienCompro(i){
+  if (!i.bought_by) return 'Comprado';
+  const quien = i.bought_by === S.api.uid ? 'Lo compraste tú' : `Lo compró ${S.members.find(m => m.id === i.bought_by)?.name || 'un antiguo compañero'}`;
+  if (!i.bought_at) return quien;
+  const d = new Date(i.bought_at);
+  return `${quien} · ${dayLabel(i.bought_at).toLowerCase()}, ${d.toLocaleTimeString('es-ES',{hour:'2-digit',minute:'2-digit'})}`;
+}
 function filaCompra(i){
   if (S.editItem === i.id) return `
     <li><form class="row grow" data-edit="${esc(i.id)}">
@@ -1218,14 +1232,15 @@ function filaCompra(i){
       <button class="btn ghost small" type="button" id="cancelEdit">Cancelar</button></form></li>`;
   return `
     <li><button class="check" aria-pressed="${i.is_bought}" data-b="${esc(i.id)}" aria-label="${i.is_bought?'Marcar como pendiente':'Marcar como comprado'}: ${esc(i.name)}">${CHECK}</button>
-      <span class="grow name ${i.is_bought?'done':''}">${esc(i.name)}</span>
+      ${i.is_bought ? `<span class="grow"><span class="name done">${esc(i.name)}</span><br><span class="small dim">${esc(quienCompro(i))}</span></span>`
+        : `<span class="grow name">${esc(i.name)}</span>`}
       <button class="x" data-e="${esc(i.id)}" aria-label="Editar ${esc(i.name)}">${PENCIL}</button>
       <button class="x" data-d="${esc(i.id)}" aria-label="Quitar ${esc(i.name)}">${CROSS}</button></li>`;
 }
 async function renderCompra(){
   const items = await S.api.items(S.apt.id);
   const pend = items.filter(i => !i.is_bought);
-  const comprados = items.filter(i => i.is_bought);
+  const comprados = items.filter(i => i.is_bought).sort((a,b) => String(b.bought_at||'').localeCompare(String(a.bought_at||'')));
 
   // agrupar los pendientes por día, del más reciente al más antiguo
   const dias = [];
@@ -1247,12 +1262,14 @@ async function renderCompra(){
       </form>
       ${pend.length ? dias.map(d => bloque(d.et, d.items)).join('')
         : '<p class="empty">Nada pendiente. La nevera está a salvo.</p>'}
-      ${comprados.length ? bloque('Ya comprado', comprados) : ''}
+      ${comprados.length ? bloque('Ya comprado', comprados) + '<p class="small dim" style="margin:6px 2px 0">Si tachaste algo por error, vuelve a pulsarlo y regresa a la lista.</p>' : ''}
     </section>`;
 
   $('#fItem').onsubmit = e => run(e, async () => { await S.api.addItem(S.apt.id, $('#itemName').value.trim()); await renderCompra(); });
   app.querySelectorAll('[data-b]').forEach(b => b.onclick = async () => {
-    try{ await S.api.setBought(b.dataset.b, b.getAttribute('aria-pressed') !== 'true'); await renderCompra(); }catch(err){ toast(friendly(err)); }
+    if (b.disabled) return; b.disabled = true;
+    try{ await S.api.setBought(b.dataset.b, b.getAttribute('aria-pressed') !== 'true'); }catch(err){ toast(friendly(err)); }
+    await renderCompra();
   });
   app.querySelectorAll('[data-d]').forEach(b => b.onclick = async () => {
     try{ await S.api.delItem(b.dataset.d); await renderCompra(); }catch(err){ toast(friendly(err)); }
