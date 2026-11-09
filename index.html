@@ -246,6 +246,9 @@ input.invalid,select.invalid{border-color:var(--bad)}
 :root[data-theme="dark"] .turno.ok{background:#16302A;color:#BDEBD3;border-color:#4C8A70}
 :root[data-theme="dark"] .turno.ok .badge{background:#BDEBD3;color:#16302A}
 .state.late{border-color:var(--bad);color:var(--bad)}
+li.paused>.grow,li.paused>.right{opacity:.55}
+.acts{display:flex;gap:14px;flex-wrap:wrap;margin-top:6px}
+.acts .link{min-height:40px;padding:0;font-weight:800}
 .wk{margin:18px 0 2px;font-size:14px;font-weight:900;color:var(--accent)}
 .cumple{display:flex;flex-wrap:wrap;gap:6px;margin:4px 0 0}
 .list.receipt li.urgent{background:var(--alert-bg);border-radius:12px;padding-left:12px;padding-right:12px;margin:4px -12px;border-top-color:transparent}
@@ -396,6 +399,12 @@ const FREQ = {weekly:'Semanal',monthly:'Mensual',bimonthly:'Bimestral',quarterly
 const initial = n => (n || '?').trim().charAt(0).toUpperCase() || '?';
 let toastTimer;
 function toast(msg){ const t = $('#toast'); t.textContent = msg; t.hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(()=>{ t.hidden = true; }, 3800); }
+// quita el mensaje de error de un campo del formulario
+function clearFieldError(id){
+  const el = document.getElementById(id), er = document.getElementById('e' + id.slice(1));
+  if (er){ er.hidden = true; er.textContent = ''; }
+  if (el){ el.classList.remove('invalid'); el.removeAttribute('aria-invalid'); }
+}
 function friendly(err){
   const m = (err && (err.message || err.msg)) || String(err);
   if (err && err.code === '23505') return 'Eso ya existe en el piso.';
@@ -496,12 +505,17 @@ function remoteApi(sb, uid){
       const rows = ok(await sb.from('cleaning_assignments').update({is_done:v}).eq('id', id).select('id'));
       if (!rows.length) throw new Error('Solo puedes marcar tus propias tareas.');
     },
-    async bills(aptId){ return ok(await sb.from('recurring_bills').select('id,name,amount,frequency,next_due_date,paid_by,is_paused').eq('apartment_id', aptId).eq('is_paused', false).order('next_due_date').order('name')); },
+    async bills(aptId){ return ok(await sb.from('recurring_bills').select('id,name,amount,frequency,next_due_date,paid_by,is_paused').eq('apartment_id', aptId).order('next_due_date').order('name')); },
     async addBill(aptId,b){ ok(await sb.from('recurring_bills').insert({apartment_id:aptId,...b})); },
     async billPayments(aptId){ return ok(await sb.from('bill_payments').select('bill_id,user_id,due_date').eq('apartment_id', aptId)); },
     async payShare(aptId,billId,due){ ok(await sb.from('bill_payments').insert({apartment_id:aptId,bill_id:billId,user_id:uid,due_date:due})); },
     async unpayShare(billId,due){ ok(await sb.from('bill_payments').delete().eq('bill_id',billId).eq('due_date',due).eq('user_id',uid)); },
     // TEO-35: crea los gastos de las facturas cuyo vencimiento ha llegado (idempotente)
+    // TEO-36: editar o pausar. Si la base de datos no deja (otro piso), no cambia ninguna fila.
+    async updateBill(billId, fields){
+      const rows = ok(await sb.from('recurring_bills').update(fields).eq('id', billId).select('id'));
+      if (!rows || !rows.length) throw new Error('No tienes permiso para modificar esta factura.');
+    },
     async generateDue(aptId){ return ok(await sb.rpc('generate_due_bills',{p_apartment_id:aptId})) || 0; },
     async billExpenses(aptId){
       const rows = ok(await sb.from('expenses').select('id,description,amount,expense_date,paid_by,recurring_bill_id,created_at,expense_shares(user_id,amount)')
@@ -614,11 +628,12 @@ function demoApi(clave){
       return wait(out.sort((a,b)=> b.week.localeCompare(a.week) || a.zone.localeCompare(b.zone,'es')));
     },
     setDone:(i,v)=>{ db.done[i]= v ? new Date().toISOString() : null; return wait(); },
-    bills:()=>wait(db.bills.filter(b=>!b.is_paused).sort((a,b)=>a.next_due_date.localeCompare(b.next_due_date)||a.name.localeCompare(b.name,'es'))),
+    bills:()=>wait(db.bills.slice().sort((a,b)=>a.next_due_date.localeCompare(b.next_due_date)||a.name.localeCompare(b.name,'es'))),
     addBill:(a,b)=>{ db.bills.push({id:id('b'),is_paused:false,...b}); return wait(); },
     billPayments:()=>wait(db.pagos.slice()),
     payShare:(a,billId,due)=>{ db.pagos.push({bill_id:billId,user_id:me,due_date:due}); return wait(); },
     unpayShare:(billId,due)=>{ db.pagos = db.pagos.filter(p=>!(p.bill_id===billId && p.due_date===due && p.user_id===me)); return wait(); },
+    updateBill:(billId, fields)=>{ const b = db.bills.find(x => x.id === billId); if (!b) return Promise.reject(new Error('No tienes permiso para modificar esta factura.')); Object.assign(b, fields); return wait(); },
     generateDue:()=>{
       const hoy = iso(new Date()); let n = 0;
       db.bills.filter(b => !b.is_paused && db.members.some(m => m.id === b.paid_by)).forEach(b => {
@@ -778,7 +793,7 @@ function dueWords(d){
 }
 function bannerHtml(){
   if (S.tab === 'facturas') return '';
-  const urgent = (S.bills || []).filter(b => daysUntil(b.next_due_date) < 3);
+  const urgent = (S.bills || []).filter(b => !b.is_paused && daysUntil(b.next_due_date) < 3);
   if (!urgent.length) return '';
   const lines = urgent.slice(0,3).map(b => `${esc(b.name)} ${dueWords(daysUntil(b.next_due_date))}`).join('. ');
   return `<button class="alert" data-go="facturas"><b>${urgent.length===1?'Una factura vence pronto':urgent.length+' facturas vencen pronto'}</b>${lines}.</button>`;
@@ -820,7 +835,7 @@ app.addEventListener('click', async e => {
   if (acc){ const m = $('#userMenu'); m.hidden = !m.hidden; acc.setAttribute('aria-expanded', String(!m.hidden)); return; }
   if (e.target.closest('[data-logout]')){ await S.sb.auth.signOut(); S.tab = 'piso'; await boot(false); return; }
   const g = e.target.closest('[data-go]'); if (!g) return;
-  S.tab = g.dataset.go; S.editItem = null; render(); window.scrollTo(0,0);
+  S.tab = g.dataset.go; S.editItem = null; S.editBill = null; render(); window.scrollTo(0,0);
 });
 /* Animaciones: onda al pulsar y entrada al cambiar de pestaña */
 document.addEventListener('pointerdown', e => {
@@ -841,7 +856,7 @@ new MutationObserver(() => {
 function renderNav(){
   $('#navIn').innerHTML = TABS.map(([k,l]) => `<button data-tab="${k}" ${S.tab===k?'aria-current="page"':''}>${l}</button>`).join('');
   document.body.dataset.tab = S.tab;
-  $('#navIn').querySelectorAll('button').forEach(b => b.onclick = () => { S.tab = b.dataset.tab; S.editItem = null; render(); window.scrollTo(0,0); });
+  $('#navIn').querySelectorAll('button').forEach(b => b.onclick = () => { S.tab = b.dataset.tab; S.editItem = null; S.editBill = null; render(); window.scrollTo(0,0); });
 }
 async function render(){
   if (S.tab === 'perfil' && !(S.api.kind === 'supabase' && !S.anon)) S.tab = 'piso';
@@ -1005,7 +1020,7 @@ async function renderPerfil(){
   const card = ({ a, mem, items, zones, bills }) => {
     const actual = S.apt && S.apt.id === a.id;
     const pend = items.filter(i => !i.is_bought).length;
-    const total = bills.reduce((n, b) => n + Number(b.amount), 0);
+    const total = bills.filter(b => !b.is_paused).reduce((n, b) => n + Number(b.amount), 0);
     const tiles = a.invite_code.split('').map((c, i) => `<span class="tile mag m${(i%6)+1}">${esc(c)}</span>`).join('');
     return `<section class="sec">
       <div class="sec-head"><h2>${esc(a.name)}</h2>${actual ? '<span class="you">Piso actual</span>' : ''}</div>
@@ -1404,8 +1419,12 @@ const REPITE = {weekly:'cada semana',monthly:'cada mes',bimonthly:'cada 2 meses'
 async function renderFacturas(){
   await autoExpenses();
   const [bills, pagos, gastos] = await Promise.all([S.api.bills(S.apt.id), S.api.billPayments(S.apt.id).catch(()=>[]), (S.api.billExpenses ? S.api.billExpenses(S.apt.id) : Promise.resolve([])).catch(()=>[])]);
+  bills.sort((a,b) => (a.is_paused - b.is_paused) || a.next_due_date.localeCompare(b.next_due_date) || a.name.localeCompare(b.name,'es'));
   S.bills = bills;
   const who = id => S.members.find(m => m.id === id)?.name || 'un antiguo compañero';
+  const ed = S.editBill ? bills.find(b => b.id === S.editBill) : null;
+  if (!ed) S.editBill = null;
+  const activas = bills.filter(b => !b.is_paused).length;
   const n = Math.max(S.members.length, 1);
   app.innerHTML = `${header('Facturas')}
     <section class="sec">
@@ -1420,6 +1439,15 @@ async function renderFacturas(){
         const hechos = pagos.filter(p => p.bill_id === b.id && p.due_date === b.next_due_date);
         const yoPago = hechos.some(p => p.user_id === S.api.uid);
         const todos = hechos.length >= n;
+        const acts = `<span class="acts"><button type="button" class="link" data-edit="${esc(b.id)}" aria-label="Editar ${esc(b.name)}">Editar</button>
+              <button type="button" class="link" data-pause="${esc(b.id)}" data-to="${!b.is_paused}" aria-label="${b.is_paused ? 'Reanudar' : 'Pausar'} ${esc(b.name)}">${b.is_paused ? 'Reanudar' : 'Pausar'}</button></span>`;
+        if (b.is_paused) return `<li class="paused"><span class="grow">
+            <span class="name">${esc(b.name)}</span><br>
+            <span class="small dim">${esc(fmtDate(b.next_due_date))} · se repite ${esc(REPITE[b.frequency] || 'cada mes')} · la adelanta ${esc(who(b.paid_by))}</span>
+            <span class="meta-line"><span class="state">No genera gastos mientras esté en pausa</span></span>
+            ${acts}
+          </span>
+          <span class="right"><span class="amount">${eur(b.amount)}</span><span class="due dim">En pausa</span></span></li>`;
         return `<li class="${urgent && !todos ? 'urgent' : ''}"><span class="grow">
             <span class="name">${esc(b.name)}</span><br>
             <span class="small dim">${esc(fmtDate(b.next_due_date))} · se repite ${esc(REPITE[b.frequency] || 'cada mes')} · la adelanta ${esc(who(b.paid_by))}</span>
@@ -1432,6 +1460,7 @@ async function renderFacturas(){
               <button class="btn small ${yoPago?'ghost':''}" data-pay="${esc(b.id)}" data-due="${esc(b.next_due_date)}" data-on="${yoPago}">${yoPago ? 'Ya he pagado mi parte ✓' : `Pagar mi parte (${eur(parte)})`}</button>
             </span>
             ${todos ? '<span class="meta-line"><span class="state ok">Pagada entre todos</span></span>' : ''}
+            ${acts}
           </span>
           <span class="right"><span class="amount">${eur(b.amount)}</span><span class="small dim">tu parte ${eur(parte)}</span>${due}</span></li>`; }).join('')
         : '<li class="empty">Todavía no hay facturas. Da de alta la luz, el agua o el internet y se repetirán solas.</li>'}</ul>
@@ -1457,19 +1486,21 @@ async function renderFacturas(){
         : '<li class="empty">Cuando llegue el vencimiento de una factura, aquí aparecerá su gasto ya repartido.</li>'}</ul>
     </section>
     <section class="sec">
-      <h2>Nueva factura periódica</h2>
-      <p class="sub">Se guarda una vez y vuelve sola en cada vencimiento.</p>
+      <h2 id="fBillTitle">${ed ? 'Editar factura' : 'Nueva factura periódica'}</h2>
+      <p class="sub">${ed ? `Los cambios se aplican a los próximos gastos de «${esc(ed.name)}». Los gastos ya creados no cambian.${ed.is_paused ? ' Sigue en pausa hasta que la reanudes.' : ''}` : 'Se guarda una vez y vuelve sola en cada vencimiento.'}</p>
       <form class="panel" id="fBill" novalidate>
-        <label>Nombre<input id="bName" maxlength="60" placeholder="Luz"><small class="err" id="eName" role="alert" hidden></small></label>
+        <label>Nombre<input id="bName" maxlength="60" placeholder="Luz" value="${esc(ed ? ed.name : '')}"><small class="err" id="eName" role="alert" hidden></small></label>
         <div class="row">
-          <label>Importe (€)<input id="bAmount" type="number" inputmode="decimal" min="0.01" step="0.01" placeholder="72,40"><small class="err" id="eAmount" role="alert" hidden></small></label>
-          <label>Se repite<select id="bFreq">${Object.entries(FREQ).map(([k,v]) => `<option value="${k}" ${k==='monthly'?'selected':''}>${v}</option>`).join('')}</select></label>
+          <label>Importe (€)<input id="bAmount" type="number" inputmode="decimal" min="0.01" step="0.01" placeholder="72,40" value="${ed ? esc(ed.amount) : ''}"><small class="err" id="eAmount" role="alert" hidden></small></label>
+          <label>Se repite<select id="bFreq">${Object.entries(FREQ).map(([k,v]) => `<option value="${k}" ${k===(ed ? ed.frequency : 'monthly')?'selected':''}>${v}</option>`).join('')}</select></label>
         </div>
         <div class="row">
-          <label>Fecha de vencimiento<input id="bDate" type="date"><small class="err" id="eDate" role="alert" hidden></small></label>
-          <label>La adelanta<select id="bPaid">${S.members.map(m => `<option value="${esc(m.id)}" ${m.id===S.api.uid?'selected':''}>${esc(m.name)}</option>`).join('')}</select></label>
+          <label>${ed ? 'Próximo vencimiento' : 'Fecha de vencimiento'}<input id="bDate" type="date" value="${ed ? esc(ed.next_due_date) : ''}"><small class="err" id="eDate" role="alert" hidden></small></label>
+          <label>La adelanta<select id="bPaid">${ed && !S.members.some(m => m.id === ed.paid_by) ? `<option value="${esc(ed.paid_by)}" selected>Antiguo compañero</option>` : ''}${S.members.map(m => `<option value="${esc(m.id)}" ${m.id===(ed ? ed.paid_by : S.api.uid)?'selected':''}>${esc(m.name)}</option>`).join('')}</select><small class="err" id="ePaid" role="alert" hidden></small></label>
         </div>
-        <button class="btn" type="submit">Dar de alta</button>
+        ${ed && !ed.is_paused ? '<p class="small dim" style="margin:0">Si pones una fecha ya pasada, al guardar se crearán los gastos de esos vencimientos con el importe nuevo.</p>' : ''}
+        <button class="btn" type="submit">${ed ? 'Guardar cambios' : 'Dar de alta'}</button>
+        ${ed ? '<button class="btn ghost" type="button" id="cancelEdit">Cancelar</button>' : ''}
       </form>
     </section>`;
 
@@ -1481,9 +1512,9 @@ async function renderFacturas(){
     }catch(err){ toast(friendly(err)); }
   });
 
-  ['bName','bAmount','bDate'].forEach(id => $('#'+id).addEventListener('input', () => clearFieldError(id)));
+  ['bName','bAmount','bDate','bPaid'].forEach(id => $('#'+id).addEventListener('input', () => clearFieldError(id)));
   $('#fBill').onsubmit = e => run(e, async () => {
-    ['bName','bAmount','bDate'].forEach(clearFieldError);
+    ['bName','bAmount','bDate','bPaid'].forEach(clearFieldError);
     let first = null;
     const fail = (id, msg) => { const el = $('#'+id), er = $('#e'+id.slice(1)); er.textContent = msg; er.hidden = false; el.classList.add('invalid'); el.setAttribute('aria-invalid','true'); first = first || el; };
     const name = $('#bName').value.trim();
@@ -1492,9 +1523,34 @@ async function renderFacturas(){
     if (!name) fail('bName', 'Escribe el nombre de la factura.');
     if (!(amount > 0)) fail('bAmount', 'Indica un importe mayor que 0.');
     if (!date) fail('bDate', 'Indica la fecha de vencimiento.');
+    const paid = $('#bPaid').value;
+    if (!S.members.some(m => m.id === paid)) fail('bPaid', 'Elige quién la adelanta: esa persona ya no está en el piso.');
     if (first){ first.focus(); return; }
-    await S.api.addBill(S.apt.id, {name, amount, frequency:$('#bFreq').value, next_due_date:date, paid_by:$('#bPaid').value});
-    toast('Factura dada de alta.'); await renderFacturas();
+    const datos = {name, amount, frequency:$('#bFreq').value, next_due_date:date, paid_by:paid};
+    if (ed){ await S.api.updateBill(ed.id, datos); S.editBill = null; toast('Factura actualizada.'); }
+    else { await S.api.addBill(S.apt.id, datos); toast('Factura dada de alta.'); }
+    await renderFacturas();
+  });
+  const ce = $('#cancelEdit'); if (ce) ce.onclick = () => { S.editBill = null; renderFacturas(); };
+  app.querySelectorAll('[data-edit]').forEach(b => b.onclick = async () => {
+    S.editBill = b.dataset.edit; await renderFacturas();
+    $('#fBill').scrollIntoView({behavior:'smooth', block:'center'}); $('#bAmount').focus({preventScroll:true});
+  });
+  app.querySelectorAll('[data-pause]').forEach(b => b.onclick = async () => {
+    const bill = bills.find(x => x.id === b.dataset.pause); if (!bill) return;
+    const pausar = b.dataset.to === 'true';
+    b.disabled = true;
+    try{
+      if (pausar){ await S.api.updateBill(bill.id, {is_paused:true}); toast('Factura en pausa: no generará gastos.'); }
+      else {
+        // al reanudar no se cobran los meses en pausa: el vencimiento salta al siguiente que no haya pasado
+        const hoy = iso(new Date()), antes = bill.next_due_date; let d = antes;
+        for (let k = 0; d < hoy && k < 600; k++) d = shiftDue(d, bill.frequency);
+        await S.api.updateBill(bill.id, {is_paused:false, next_due_date:d});
+        toast(d !== antes ? `Factura reanudada. Próximo vencimiento: ${fmtDate(d)}.` : 'Factura reanudada.');
+      }
+      await renderFacturas();
+    }catch(err){ b.disabled = false; toast(friendly(err)); }
   });
 }
 
