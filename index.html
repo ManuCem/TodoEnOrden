@@ -379,6 +379,16 @@ const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt
 const eur = n => new Intl.NumberFormat('es-ES',{style:'currency',currency:'EUR'}).format(Number(n));
 const pad = n => String(n).padStart(2,'0');
 const iso = d => `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
+// siguiente (dir=1) o anterior (dir=-1) vencimiento según la frecuencia
+function shiftDue(s, freq, dir = 1){
+  const d = new Date(s + 'T00:00:00');
+  if (freq === 'weekly') d.setDate(d.getDate() + 7*dir);
+  else if (freq === 'bimonthly') d.setMonth(d.getMonth() + 2*dir);
+  else if (freq === 'quarterly') d.setMonth(d.getMonth() + 3*dir);
+  else if (freq === 'yearly') d.setFullYear(d.getFullYear() + dir);
+  else d.setMonth(d.getMonth() + dir);
+  return iso(d);
+}
 function mondayOf(d = new Date()){ const x = new Date(d.getFullYear(), d.getMonth(), d.getDate()); x.setDate(x.getDate() - ((x.getDay()+6)%7)); return x; }
 function daysUntil(s){ const [y,m,d] = s.split('-').map(Number); const t = new Date(y,m-1,d); const n = new Date(); return Math.round((t - new Date(n.getFullYear(),n.getMonth(),n.getDate()))/86400000); }
 function fmtDate(s){ const [y,m,d] = s.split('-').map(Number); return new Date(y,m-1,d).toLocaleDateString('es-ES',{day:'numeric',month:'short',year:'numeric'}); }
@@ -491,6 +501,14 @@ function remoteApi(sb, uid){
     async billPayments(aptId){ return ok(await sb.from('bill_payments').select('bill_id,user_id,due_date').eq('apartment_id', aptId)); },
     async payShare(aptId,billId,due){ ok(await sb.from('bill_payments').insert({apartment_id:aptId,bill_id:billId,user_id:uid,due_date:due})); },
     async unpayShare(billId,due){ ok(await sb.from('bill_payments').delete().eq('bill_id',billId).eq('due_date',due).eq('user_id',uid)); },
+    // TEO-35: crea los gastos de las facturas cuyo vencimiento ha llegado (idempotente)
+    async generateDue(aptId){ return ok(await sb.rpc('generate_due_bills',{p_apartment_id:aptId})) || 0; },
+    async billExpenses(aptId){
+      const rows = ok(await sb.from('expenses').select('id,description,amount,expense_date,paid_by,recurring_bill_id,created_at,expense_shares(user_id,amount)')
+        .eq('apartment_id', aptId).not('recurring_bill_id','is',null).order('expense_date',{ascending:false}).order('created_at',{ascending:false}).limit(20));
+      return rows.map(e => ({id:e.id, name:e.description, amount:Number(e.amount), date:e.expense_date, paid_by:e.paid_by, bill_id:e.recurring_bill_id,
+        shares:(e.expense_shares || []).map(x => ({user_id:x.user_id, amount:Number(x.amount)})).sort((a,b) => (b.user_id===e.paid_by) - (a.user_id===e.paid_by))}));
+    },
     async advanceBill(billId){ ok(await sb.rpc('advance_bill',{p_bill_id:billId})); }
   };
 }
@@ -537,7 +555,7 @@ function demoApi(clave){
     bills: P.facturas.map(([name,amount,frequency,dias,quien,pausada],i) => ({
       id:'b'+i, name, amount, frequency, next_due_date: iso(new Date(Date.now()+dias*864e5)),
       paid_by: uid(quien), is_paused: !!pausada })),
-    pagos: [], n: 100
+    pagos: [], gastos: [], n: 100
   };
   // una tarea de la semana ya hecha, para que la demo no salga vacía
   const w = iso(mondayOf());
@@ -546,6 +564,20 @@ function demoApi(clave){
     db.pagos.push({ bill_id: db.bills[0].id, user_id: uid(1), due_date: db.bills[0].next_due_date });
   const id = p => p + (db.n++);
   const wait = v => new Promise(r => setTimeout(()=>r(v), 110));
+  // gasto de una factura, repartido a partes iguales; los céntimos sobrantes, para quien la adelanta
+  const crearGasto = (b, date) => {
+    const parts = [db.members.find(m => m.id === b.paid_by), ...db.members.filter(m => m.id !== b.paid_by)];
+    const cents = Math.round(Number(b.amount)*100), base = Math.floor(cents/parts.length), rem = cents % parts.length;
+    db.gastos.push({id:id('e'), name:b.name, amount:Number(b.amount), date, paid_by:b.paid_by, bill_id:b.id,
+      shares: parts.map((m,i) => ({user_id:m.id, amount:(base + (i < rem ? 1 : 0))/100}))});
+  };
+  // gastos de meses anteriores, para que la demo no salga vacía
+  db.bills.filter(b => !b.is_paused).slice(0,3).forEach((b,j) => {
+    const prev = shiftDue(b.next_due_date, b.frequency, -1);
+    if (prev >= iso(new Date())) return;
+    crearGasto(b, prev);
+    db.members.filter(m => m.id !== b.paid_by).forEach((m,k) => { if (j === 0 || (j === 1 && k === 0)) db.pagos.push({bill_id:b.id, user_id:m.id, due_date:prev}); });
+  });
   return {
     kind:'demo', uid:me, piso:pisoDemo,
     myName:()=>wait(db.myName), setName:n=>{ db.myName=n; db.members[0].name=n; return wait(); },
@@ -587,6 +619,17 @@ function demoApi(clave){
     billPayments:()=>wait(db.pagos.slice()),
     payShare:(a,billId,due)=>{ db.pagos.push({bill_id:billId,user_id:me,due_date:due}); return wait(); },
     unpayShare:(billId,due)=>{ db.pagos = db.pagos.filter(p=>!(p.bill_id===billId && p.due_date===due && p.user_id===me)); return wait(); },
+    generateDue:()=>{
+      const hoy = iso(new Date()); let n = 0;
+      db.bills.filter(b => !b.is_paused && db.members.some(m => m.id === b.paid_by)).forEach(b => {
+        for (let k = 0; b.next_due_date <= hoy && k < 24; k++){
+          if (!db.gastos.some(g => g.bill_id === b.id && g.date === b.next_due_date)){ crearGasto(b, b.next_due_date); n++; }
+          b.next_due_date = shiftDue(b.next_due_date, b.frequency);
+        }
+      });
+      return wait(n);
+    },
+    billExpenses:()=>wait(db.gastos.slice().sort((a,b)=>b.date.localeCompare(a.date)||a.name.localeCompare(b.name,'es')).slice(0,20)),
     advanceBill:(billId)=>{ const b = db.bills.find(x=>x.id===billId); const d = new Date(b.next_due_date+'T00:00:00');
       const saltos={weekly:()=>d.setDate(d.getDate()+7),monthly:()=>d.setMonth(d.getMonth()+1),bimonthly:()=>d.setMonth(d.getMonth()+2),quarterly:()=>d.setMonth(d.getMonth()+3),yearly:()=>d.setFullYear(d.getFullYear()+1)};
       (saltos[b.frequency]||saltos.monthly)(); b.next_due_date = iso(d); return wait(); }
@@ -685,6 +728,7 @@ async function start(){
     try{ await S.api.setAvatar(S.avatar); S.myAvatar = S.avatar; }catch{}
   }
   await refreshApt();
+  await autoExpenses();
   const cod = safeStorage.getItem('teo_codigo');
   if (cod){
     safeStorage.removeItem('teo_codigo');
@@ -693,6 +737,15 @@ async function start(){
     } else if (S.apt.invite_code !== cod) toast('Ya estás en un piso. Sal de él en Mi perfil para unirte a otro.');
   }
   render();
+}
+/* TEO-35: al abrir la app se crean los gastos de las facturas vencidas. Si falla, la app sigue. */
+async function autoExpenses(){
+  if (!S.apt || !S.api.generateDue) return 0;
+  try{
+    const n = await S.api.generateDue(S.apt.id);
+    if (n > 0) toast(n === 1 ? 'Se ha creado 1 gasto de una factura vencida.' : `Se han creado ${n} gastos de facturas vencidas.`);
+    return n;
+  }catch(e){ console.warn('No se pudieron generar los gastos de las facturas:', e); return 0; }
 }
 async function refreshApt(){
   S.apt = await S.api.apartment();
@@ -1313,7 +1366,7 @@ const PASOS = [
   ['1','Crea tu piso o únete','Quien monta el piso recibe un código de 6 letras. Los demás lo escriben una vez y ya están dentro. Todos veis lo mismo al instante.'],
   ['2','Apuntad la compra','Cualquiera añade lo que falta en casa. Quien va al súper lo va tachando, y al lado queda su nombre para que se sepa quién ha ido.'],
   ['3','Repartid la limpieza','Definís las zonas una vez y la app reparte los turnos cada semana, rotando para que no le toque siempre lo mismo a la misma persona. Cada uno marca su tarea cuando la hace. Al abrir la app, una tarjeta te recuerda tu turno y el plazo, y en Limpieza tienes el histórico de quién ha cumplido.'],
-  ['4','Controlad las facturas','Dad de alta la luz, el agua o el internet con su importe y cada cuánto se repiten. La app os avisa de los vencimientos, divide el importe entre los del piso y cada uno marca cuando ha pagado su parte.'],
+  ['4','Controlad las facturas','Dad de alta la luz, el agua o el internet con su importe y cada cuánto se repiten. La app os avisa de los vencimientos y, el día que vence, crea sola el gasto repartido entre los del piso. Cada uno marca cuando ha pagado su parte.'],
   ['5','Compartid el enlace','La app se abre desde el navegador del móvil, sin instalar nada. Pásale el enlace a tus compañeros.']
 ];
 function renderAyuda(){
@@ -1349,9 +1402,10 @@ function dayLabel(when){
 }
 const REPITE = {weekly:'cada semana',monthly:'cada mes',bimonthly:'cada 2 meses',quarterly:'cada 3 meses',yearly:'cada año'};
 async function renderFacturas(){
-  const [bills, pagos] = await Promise.all([S.api.bills(S.apt.id), S.api.billPayments(S.apt.id).catch(()=>[])]);
+  await autoExpenses();
+  const [bills, pagos, gastos] = await Promise.all([S.api.bills(S.apt.id), S.api.billPayments(S.apt.id).catch(()=>[]), (S.api.billExpenses ? S.api.billExpenses(S.apt.id) : Promise.resolve([])).catch(()=>[])]);
   S.bills = bills;
-  const who = id => S.members.find(m => m.id === id)?.name || 'Alguien';
+  const who = id => S.members.find(m => m.id === id)?.name || 'un antiguo compañero';
   const n = Math.max(S.members.length, 1);
   app.innerHTML = `${header('Facturas')}
     <section class="sec">
@@ -1369,18 +1423,38 @@ async function renderFacturas(){
         return `<li class="${urgent && !todos ? 'urgent' : ''}"><span class="grow">
             <span class="name">${esc(b.name)}</span><br>
             <span class="small dim">${esc(fmtDate(b.next_due_date))} · se repite ${esc(REPITE[b.frequency] || 'cada mes')} · la adelanta ${esc(who(b.paid_by))}</span>
+            ${d < 0 && !S.members.some(m => m.id === b.paid_by) ? '<span class="meta-line"><span class="state late">No se puede crear su gasto: quien la adelantaba ya no está en el piso</span></span>' : ''}
             <span class="meta-line">${S.members.map(m => {
               const ok = hechos.some(p => p.user_id === m.id);
               return `<span class="state ${ok?'ok':''}" title="${ok?'ha pagado su parte':'le falta pagar'}">${esc(m.name)}${ok?' ✓':''}</span>`;
             }).join('')}</span>
             <span class="meta-line">
               <button class="btn small ${yoPago?'ghost':''}" data-pay="${esc(b.id)}" data-due="${esc(b.next_due_date)}" data-on="${yoPago}">${yoPago ? 'Ya he pagado mi parte ✓' : `Pagar mi parte (${eur(parte)})`}</button>
-              ${todos ? `<button class="btn small ghost" data-next="${esc(b.id)}">Pasar al siguiente vencimiento</button>` : ''}
             </span>
             ${todos ? '<span class="meta-line"><span class="state ok">Pagada entre todos</span></span>' : ''}
           </span>
           <span class="right"><span class="amount">${eur(b.amount)}</span><span class="small dim">tu parte ${eur(parte)}</span>${due}</span></li>`; }).join('')
         : '<li class="empty">Todavía no hay facturas. Da de alta la luz, el agua o el internet y se repetirán solas.</li>'}</ul>
+    </section>
+    <section class="sec" id="gastosGen">
+      <div class="sec-head"><h2>Gastos generados</h2><span class="count">${gastos.length}</span></div>
+      <p class="sub">Se crean solos el día del vencimiento y se reparten a partes iguales entre quienes viven en el piso. Si sobra algún céntimo, se lo queda quien la adelanta.</p>
+      <ul class="list receipt">${gastos.length ? gastos.map(g => {
+        const marcado = u => pagos.some(p => p.bill_id === g.bill_id && p.due_date === g.date && p.user_id === u);
+        const pagado = u => u === g.paid_by || marcado(u);
+        const mia = g.shares.find(x => x.user_id === S.api.uid);
+        const yoPago = marcado(S.api.uid);
+        const faltan = g.shares.filter(x => !pagado(x.user_id)).length;
+        const iguales = g.shares.length && g.shares.every(x => Math.abs(x.amount - g.shares[g.shares.length-1].amount) < 0.015);
+        const reparto = !g.shares.length ? '' : iguales ? `${g.shares.length} × ${eur(g.shares[g.shares.length-1].amount)}` : `${g.shares.length} partes`;
+        return `<li><span class="grow"><span class="name">${esc(g.name)}</span><br>
+            <span class="small dim">Vencimiento del ${esc(fmtDate(g.date))} · la adelantó ${esc(who(g.paid_by))}</span>
+            <span class="meta-line">${g.shares.map(x => `<span class="state ${pagado(x.user_id)?'ok':''}" title="${x.user_id===g.paid_by?'la adelantó':pagado(x.user_id)?'ha pagado su parte':'le falta pagar'}">${esc(x.user_id === S.api.uid ? 'Tú' : (S.members.find(m => m.id === x.user_id)?.name || 'Antiguo compañero'))} ${eur(x.amount)}${pagado(x.user_id)?' ✓':''}</span>`).join('')}</span>
+            ${mia && g.paid_by !== S.api.uid && g.bill_id ? `<span class="meta-line"><button class="btn small ${yoPago?'ghost':''}" data-pay="${esc(g.bill_id)}" data-due="${esc(g.date)}" data-on="${yoPago}">${yoPago ? 'Ya he pagado mi parte ✓' : `Pagar mi parte (${eur(mia.amount)})`}</button></span>` : ''}
+            ${faltan === 0 ? '<span class="meta-line"><span class="state ok">Saldado entre todos</span></span>' : ''}
+          </span>
+          <span class="right"><span class="amount">${eur(g.amount)}</span><span class="small dim">${esc(reparto)}</span></span></li>`; }).join('')
+        : '<li class="empty">Cuando llegue el vencimiento de una factura, aquí aparecerá su gasto ya repartido.</li>'}</ul>
     </section>
     <section class="sec">
       <h2>Nueva factura periódica</h2>
@@ -1405,10 +1479,6 @@ async function renderFacturas(){
       else { await S.api.payShare(S.apt.id, btn.dataset.pay, btn.dataset.due); toast('Tu parte queda marcada como pagada.'); }
       await renderFacturas();
     }catch(err){ toast(friendly(err)); }
-  });
-  app.querySelectorAll('[data-next]').forEach(btn => btn.onclick = async () => {
-    try{ await S.api.advanceBill(btn.dataset.next); toast('Factura pasada al siguiente vencimiento.'); await renderFacturas(); }
-    catch(err){ toast(friendly(err)); }
   });
 
   ['bName','bAmount','bDate'].forEach(id => $('#'+id).addEventListener('input', () => clearFieldError(id)));
