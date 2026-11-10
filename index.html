@@ -150,6 +150,22 @@ button{cursor:pointer}
 .row>*{min-width:0}
 .row>label,.row>input{flex:1}
 label{display:grid;gap:5px;font-size:14px;font-weight:700}
+textarea{width:100%;min-height:96px;padding:10px 12px;border-radius:10px;border:1.5px solid var(--line);background:var(--paper);color:var(--ink);font:inherit;resize:vertical}
+textarea:focus{outline:3px solid color-mix(in srgb, var(--accent) 35%, transparent);outline-offset:1px}
+.list li.norma{display:block}
+.norma .desc{margin:4px 0 0;white-space:pre-wrap;overflow-wrap:anywhere}
+.confirm{margin-top:10px;padding:12px;border:1.5px solid var(--bad);border-radius:10px;display:grid;gap:10px}
+.confirm .row{display:flex;gap:10px;flex-wrap:wrap}
+.btn.danger{background:var(--bad);border-color:var(--bad);color:#fff}
+.list.act-log li{display:block}
+.act-log details{margin-top:4px}
+.act-log summary{cursor:pointer;font-weight:800;color:var(--accent);min-height:32px;display:flex;align-items:center}
+.act-log dl{margin:6px 0 0;display:grid;gap:4px}
+.act-log dt{font-size:12px;font-weight:900;text-transform:uppercase;letter-spacing:.05em;color:var(--muted)}
+.act-log dd{margin:0;overflow-wrap:anywhere;white-space:pre-wrap}
+.tag-act{font-size:12px;font-weight:900;padding:1px 8px;border-radius:99px;border:1.5px solid currentColor;margin-right:6px}
+.tag-act.created{color:#2E7D5B}.tag-act.updated{color:#B26A00}.tag-act.deleted{color:var(--bad)}
+.counter{font-size:12px;color:var(--muted);justify-self:end}
 input,select{width:100%;min-height:48px;padding:10px 12px;border-radius:10px;border:1.5px solid var(--line);
   background:var(--paper);color:var(--ink)}
 input::placeholder{color:var(--muted);opacity:.9}
@@ -520,6 +536,18 @@ function remoteApi(sb, uid){
       const rows = ok(await sb.from('recurring_bills').update(fields).eq('id', billId).select('id'));
       if (!rows || !rows.length) throw new Error('No tienes permiso para modificar esta factura.');
     },
+    // Normas del piso: mismos permisos para todos; autor, fechas y registro los pone la base de datos
+    async rules(aptId){ return ok(await sb.rpc('list_house_rules', {p_apartment_id:aptId})) || []; },
+    async rulesLog(aptId){ return ok(await sb.rpc('list_house_rules_log', {p_apartment_id:aptId, p_limit:30})) || []; },
+    async addRule(aptId, r){ ok(await sb.from('house_rules').insert({apartment_id:aptId, title:r.title, description:r.description})); },
+    async updateRule(ruleId, r){
+      const rows = ok(await sb.from('house_rules').update({title:r.title, description:r.description}).eq('id', ruleId).select('id'));
+      if (!rows || !rows.length) throw new Error('Esa norma ya no existe: alguien la ha eliminado.');
+    },
+    async delRule(ruleId){
+      const rows = ok(await sb.from('house_rules').delete().eq('id', ruleId).select('id'));
+      if (!rows || !rows.length) throw new Error('Esa norma ya no existe: alguien la ha eliminado.');
+    },
     async generateDue(aptId){ return ok(await sb.rpc('generate_due_bills',{p_apartment_id:aptId})) || 0; },
     async billExpenses(aptId){
       const rows = ok(await sb.from('expenses').select('id,description,amount,expense_date,paid_by,recurring_bill_id,created_at,expense_shares(user_id,amount)')
@@ -574,7 +602,7 @@ function demoApi(clave){
     bills: P.facturas.map(([name,amount,frequency,dias,quien,pausada],i) => ({
       id:'b'+i, name, amount, frequency, next_due_date: iso(new Date(Date.now()+dias*864e5)),
       paid_by: uid(quien), is_paused: !!pausada })),
-    pagos: [], gastos: [], n: 100
+    pagos: [], gastos: [], rules: [], rulesLog: [], n: 100
   };
   // una tarea de la semana ya hecha, para que la demo no salga vacía
   const w = iso(mondayOf());
@@ -590,6 +618,22 @@ function demoApi(clave){
     db.gastos.push({id:id('e'), name:b.name, amount:Number(b.amount), date, paid_by:b.paid_by, bill_id:b.id,
       shares: parts.map((m,i) => ({user_id:m.id, amount:(base + (i < rem ? 1 : 0))/100}))});
   };
+  // normas de ejemplo con su actividad
+  const nombreDe = idu => db.members.find(m => m.id === idu)?.name || null;
+  const logRegla = (action, rule, actor, when, old_data, new_data) => db.rulesLog.unshift({id:id('l'), rule_id:rule.id, action, actor_id:actor, actor_name:nombreDe(actor), acted_at:when, old_data, new_data});
+  [['Silencio por la noche','De domingo a jueves, nada de ruido a partir de las 23:00. Fines de semana, hasta la 1:00.',5],
+   ['Visitas','Si alguien se queda a dormir más de dos noches, se avisa antes en el grupo.',3],
+   ['Cocina recogida','Los platos se friegan el mismo día. Nada de dejarlos en el fregadero de un día para otro.',1]].forEach(([title, description, dias], k) => {
+    const autor = db.members[k % db.members.length].id, when = new Date(Date.now() - dias*864e5).toISOString();
+    const r = {id:id('r'), title, description, created_by:autor, created_at:when, updated_by:autor, updated_at:when};
+    db.rules.push(r); logRegla('created', r, autor, when, null, {title, description});
+  });
+  if (db.members.length > 1){
+    const r = db.rules[0], antes = {title:r.title, description:r.description}, quien = db.members[1].id, when = new Date(Date.now() - 2*864e5).toISOString();
+    r.description = 'De domingo a jueves, nada de ruido a partir de las 23:00. Viernes y sábado, hasta la 1:00.'; r.updated_by = quien; r.updated_at = when;
+    logRegla('updated', r, quien, when, antes, {title:r.title, description:r.description});
+  }
+  db.rulesLog.sort((a,b) => b.acted_at.localeCompare(a.acted_at));
   // gastos de meses anteriores, para que la demo no salga vacía
   db.bills.filter(b => !b.is_paused).slice(0,3).forEach((b,j) => {
     const prev = shiftDue(b.next_due_date, b.frequency, -1);
@@ -641,6 +685,17 @@ function demoApi(clave){
     payShare:(a,billId,due)=>{ db.pagos.push({bill_id:billId,user_id:me,due_date:due}); return wait(); },
     unpayShare:(billId,due)=>{ db.pagos = db.pagos.filter(p=>!(p.bill_id===billId && p.due_date===due && p.user_id===me)); return wait(); },
     updateBill:(billId, fields)=>{ const b = db.bills.find(x => x.id === billId); if (!b) return Promise.reject(new Error('No tienes permiso para modificar esta factura.')); Object.assign(b, fields); return wait(); },
+    rules:()=>wait(db.rules.map(r => ({...r, created_by_name:nombreDe(r.created_by), updated_by_name:nombreDe(r.updated_by)}))),
+    rulesLog:()=>wait(db.rulesLog.slice(0,30).map(l => ({...l}))),
+    addRule:(a, x)=>{ const now = new Date().toISOString(); const r = {id:id('r'), title:x.title, description:x.description, created_by:me, created_at:now, updated_by:me, updated_at:now};
+      db.rules.push(r); logRegla('created', r, me, now, null, {title:r.title, description:r.description}); return wait(); },
+    updateRule:(rid, x)=>{ const r = db.rules.find(y => y.id === rid); if (!r) return Promise.reject(new Error('Esa norma ya no existe: alguien la ha eliminado.'));
+      if (r.title === x.title && r.description === x.description) return wait();
+      const antes = {title:r.title, description:r.description}, now = new Date().toISOString();
+      Object.assign(r, {title:x.title, description:x.description, updated_by:me, updated_at:now});
+      logRegla('updated', r, me, now, antes, {title:r.title, description:r.description}); return wait(); },
+    delRule:(rid)=>{ const k = db.rules.findIndex(y => y.id === rid); if (k < 0) return Promise.reject(new Error('Esa norma ya no existe: alguien la ha eliminado.'));
+      const [r] = db.rules.splice(k,1); logRegla('deleted', r, me, new Date().toISOString(), {title:r.title, description:r.description}, null); return wait(); },
     generateDue:()=>{
       const hoy = iso(new Date()); let n = 0;
       db.bills.filter(b => !b.is_paused && db.members.some(m => m.id === b.paid_by)).forEach(b => {
@@ -842,7 +897,7 @@ app.addEventListener('click', async e => {
   if (acc){ const m = $('#userMenu'); m.hidden = !m.hidden; acc.setAttribute('aria-expanded', String(!m.hidden)); return; }
   if (e.target.closest('[data-logout]')){ await S.sb.auth.signOut(); S.tab = 'piso'; await boot(false); return; }
   const g = e.target.closest('[data-go]'); if (!g) return;
-  S.tab = g.dataset.go; S.editItem = null; S.editBill = null; render(); window.scrollTo(0,0);
+  S.tab = g.dataset.go; S.editItem = null; S.editBill = null; S.normaForm = null; S.normaDel = null; render(); window.scrollTo(0,0);
 });
 /* Animaciones: onda al pulsar y entrada al cambiar de pestaña */
 document.addEventListener('pointerdown', e => {
@@ -863,7 +918,7 @@ new MutationObserver(() => {
 function renderNav(){
   $('#navIn').innerHTML = TABS.map(([k,l]) => `<button data-tab="${k}" ${S.tab===k?'aria-current="page"':''}>${l}</button>`).join('');
   document.body.dataset.tab = S.tab;
-  $('#navIn').querySelectorAll('button').forEach(b => b.onclick = () => { S.tab = b.dataset.tab; S.editItem = null; S.editBill = null; render(); window.scrollTo(0,0); });
+  $('#navIn').querySelectorAll('button').forEach(b => b.onclick = () => { S.tab = b.dataset.tab; S.editItem = null; S.editBill = null; S.normaForm = null; S.normaDel = null; render(); window.scrollTo(0,0); });
 }
 async function render(){
   if (S.tab === 'perfil' && !(S.api.kind === 'supabase' && !S.anon)) S.tab = 'piso';
@@ -1155,6 +1210,102 @@ function renderOnboarding(){
 }
 
 /* Piso: código, compañeros, cambiar nombre, salir (TEO-10, TEO-12) */
+/* Normas del piso: todos los compañeros tienen los mismos permisos.
+   Quién y cuándo, y el registro de actividad, los guarda la base de datos (triggers). */
+function cuandoNorma(t){
+  const d = new Date(t); if (isNaN(d)) return '';
+  return d.toLocaleDateString('es-ES',{day:'numeric',month:'short',year:'numeric'}) + ', ' + d.toLocaleTimeString('es-ES',{hour:'2-digit',minute:'2-digit'});
+}
+async function renderNormas(){
+  const box = document.getElementById('normas'); if (!box) return;
+  const apt = S.apt;
+  let rules, log, fallo = false;
+  try{ [rules, log] = await Promise.all([S.api.rules(apt.id), S.api.rulesLog(apt.id)]); }catch(err){ fallo = friendly(err); }
+  const host = document.getElementById('normas'); if (!host || S.apt !== apt || S.tab !== 'piso') return;
+  if (fallo){ host.innerHTML = `<h2>Normas del piso</h2><p class="err" role="alert">No se han podido cargar las normas: ${esc(fallo)}</p><button class="btn ghost small" id="normasRetry">Reintentar</button>`; $('#normasRetry').onclick = renderNormas; return; }
+  const yo = S.api.uid;
+  const quien = (idu, nombre) => idu && idu === yo ? 'ti' : (nombre || 'un antiguo compañero');
+  const Quien = (idu, nombre) => idu && idu === yo ? 'Tú' : (nombre || 'Un antiguo compañero');
+  if (S.normaForm && S.normaForm !== 'new' && !rules.some(r => r.id === S.normaForm)) S.normaForm = null;
+  const edit = S.normaForm && S.normaForm !== 'new' ? rules.find(r => r.id === S.normaForm) : null;
+  const form = S.normaForm ? `
+    <form id="fNorma" class="grid" novalidate style="display:grid;gap:12px;margin-top:12px">
+      <h3 class="wk" style="margin:0">${edit ? 'Editar norma' : 'Nueva norma'}</h3>
+      <label>Título<input id="nTitle" maxlength="100" value="${esc(edit ? edit.title : (S.normaDraft?.title || ''))}" placeholder="Silencio por la noche" aria-describedby="eTitle">
+        <small class="err" id="eTitle" role="alert" hidden></small></label>
+      <label>Descripción<textarea id="nDesc" maxlength="1000" placeholder="De domingo a jueves, nada de ruido a partir de las 23:00." aria-describedby="eDesc nCount">${esc(edit ? edit.description : (S.normaDraft?.description || ''))}</textarea>
+        <span class="counter" id="nCount"></span><small class="err" id="eDesc" role="alert" hidden></small></label>
+      <div class="row" style="display:flex;gap:10px;flex-wrap:wrap">
+        <button class="btn" type="submit">${edit ? 'Guardar cambios' : 'Guardar norma'}</button>
+        <button class="btn ghost" type="button" id="nCancel">Cancelar</button>
+      </div>
+    </form>` : `<button class="btn" id="nAdd" style="margin-top:12px">Añadir norma</button>`;
+  const verbo = {created:'añadió', updated:'modificó', deleted:'eliminó'};
+  const etiqueta = {created:'Añadida', updated:'Modificada', deleted:'Eliminada'};
+  const bloqueDatos = (t, d) => d ? `<dt>${t}</dt><dd><b>${esc(d.title || '')}</b>
+${esc(d.description || '')}</dd>` : '';
+  host.innerHTML = `
+    <div class="sec-head"><h2>Normas del piso</h2><span class="count">${rules.length}</span></div>
+    <p class="sub">Las acordáis entre todos. Cualquiera puede añadir, editar o eliminar una norma, y todo queda anotado en la actividad.</p>
+    ${rules.length ? `<ul class="list">${rules.map(r => `
+      <li class="norma"><span class="name">${esc(r.title)}</span>
+        <p class="desc">${esc(r.description)}</p>
+        <span class="small dim">Publicada por ${esc(quien(r.created_by, r.created_by_name))} · ${esc(cuandoNorma(r.created_at))}${
+          r.updated_at && r.created_at && new Date(r.updated_at) - new Date(r.created_at) > 1000 ? `<br>Última modificación por ${esc(quien(r.updated_by, r.updated_by_name))} · ${esc(cuandoNorma(r.updated_at))}` : ''}</span>
+        ${S.normaDel === r.id ? `<div class="confirm" role="alertdialog" aria-label="Confirmar eliminación">
+            <span>¿Seguro que quieres eliminar la norma «${esc(r.title)}»? Seguirá apareciendo en la actividad.</span>
+            <span class="row"><button class="btn small danger" data-ndel-ok="${esc(r.id)}">Sí, eliminar</button><button class="btn small ghost" data-ndel-no>Cancelar</button></span></div>`
+          : `<span class="acts"><button type="button" class="link" data-nedit="${esc(r.id)}" aria-label="Editar la norma ${esc(r.title)}">Editar</button>
+            <button type="button" class="link" data-ndel="${esc(r.id)}" aria-label="Eliminar la norma ${esc(r.title)}">Eliminar</button></span>`}
+      </li>`).join('')}</ul>`
+      : '<p class="empty">Todavía no se han establecido normas para este piso.</p>'}
+    ${form}
+    <div class="sec-head" style="margin-top:20px"><h3 class="wk" style="margin:0">Actividad reciente</h3><button class="link" id="nRefresh">Actualizar</button></div>
+    ${log.length ? `<ul class="list act-log">${log.map(l => `
+      <li><span class="tag-act ${esc(l.action)}">${etiqueta[l.action] || esc(l.action)}</span>
+        <b>${esc(Quien(l.actor_id, l.actor_name))}</b> ${verbo[l.action] || ''} «${esc((l.new_data || l.old_data || {}).title || '')}»
+        <br><span class="small dim">${esc(cuandoNorma(l.acted_at))}</span>
+        <details><summary>Ver detalle</summary><dl>${l.action === 'updated' ? bloqueDatos('Antes', l.old_data) + bloqueDatos('Ahora', l.new_data)
+          : l.action === 'deleted' ? bloqueDatos('Norma eliminada', l.old_data) : bloqueDatos('Norma añadida', l.new_data)}</dl></details></li>`).join('')}</ul>`
+      : '<p class="empty">Todavía no hay actividad registrada.</p>'}`;
+
+  $('#nRefresh').onclick = async () => { await renderNormas(); toast('Normas actualizadas.'); };
+  const add = $('#nAdd'); if (add) add.onclick = () => { S.normaForm = 'new'; S.normaDel = null; renderNormas().then(() => $('#nTitle')?.focus()); };
+  host.querySelectorAll('[data-nedit]').forEach(b => b.onclick = () => { S.normaForm = b.dataset.nedit; S.normaDel = null; renderNormas().then(() => { $('#fNorma')?.scrollIntoView({behavior:'smooth', block:'center'}); $('#nTitle')?.focus({preventScroll:true}); }); });
+  host.querySelectorAll('[data-ndel]').forEach(b => b.onclick = () => { S.normaDel = b.dataset.ndel; renderNormas(); });
+  host.querySelectorAll('[data-ndel-no]').forEach(b => b.onclick = () => { S.normaDel = null; renderNormas(); });
+  host.querySelectorAll('[data-ndel-ok]').forEach(b => b.onclick = async () => {
+    b.disabled = true;
+    try{ await S.api.delRule(b.dataset.ndelOk); S.normaDel = null; toast('Norma eliminada.'); }
+    catch(err){ S.normaDel = null; toast(friendly(err)); }
+    await renderNormas();
+  });
+  const f = $('#fNorma'); if (!f) return;
+  const cuenta = () => { $('#nCount').textContent = `${$('#nDesc').value.length} / 1000`; };
+  cuenta(); $('#nDesc').addEventListener('input', () => { cuenta(); clearFieldError('nDesc'); });
+  $('#nTitle').addEventListener('input', () => clearFieldError('nTitle'));
+  $('#nCancel').onclick = () => { S.normaForm = null; S.normaDraft = null; renderNormas(); };
+  f.onsubmit = async e => {
+    e.preventDefault();
+    const title = $('#nTitle').value.trim(), description = $('#nDesc').value.trim();
+    let first = null;
+    const fail = (idc, msg) => { const er = document.getElementById('e' + idc.slice(1)); er.textContent = msg; er.hidden = false; const el = document.getElementById(idc); el.setAttribute('aria-invalid','true'); if (!first) first = el; };
+    if (!title) fail('nTitle', 'Escribe un título para la norma.'); else if (title.length > 100) fail('nTitle', 'El título puede tener como máximo 100 caracteres.');
+    if (!description) fail('nDesc', 'Escribe en qué consiste la norma.'); else if (description.length > 1000) fail('nDesc', 'La descripción puede tener como máximo 1000 caracteres.');
+    if (first){ first.focus(); return; }
+    const btn = f.querySelector('button[type=submit]'); btn.disabled = true;
+    try{
+      if (edit){ await S.api.updateRule(edit.id, {title, description}); toast('Norma modificada correctamente.'); }
+      else { await S.api.addRule(apt.id, {title, description}); toast('Norma añadida correctamente.'); }
+      S.normaForm = null; S.normaDraft = null;
+      await renderNormas();
+    }catch(err){
+      // el formulario sigue abierto con lo escrito
+      btn.disabled = false; toast(friendly(err));
+    }
+  };
+}
+
 async function renderPiso(){
   const apt = S.apt;
   let asg = null;
@@ -1187,8 +1338,10 @@ async function renderPiso(){
           ${apt.owner_id && m.id === apt.owner_id ? '<span class="you">Admin</span>' : ''}
           ${m.id===S.api.uid ? '<span class="you">Tú</span>' : ''}</li>`).join('')}</ul>
     </section>
+    <section class="sec" id="normas" aria-live="polite"><h2>Normas del piso</h2><p class="sub">Cargando…</p></section>
     ${ajustesPisoHtml(apt)}`;
   bindAjustesPiso(apt);
+  renderNormas();
   app.querySelectorAll('[data-turno]').forEach(b => b.onclick = async () => {
     b.disabled = true;
     try{ await S.api.setDone(b.dataset.turno, true); await renderPiso(); toast('Tarea marcada como hecha.'); }catch(err){ b.disabled = false; toast(friendly(err)); }
