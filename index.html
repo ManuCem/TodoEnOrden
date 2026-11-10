@@ -379,6 +379,27 @@ li.paused>.grow,li.paused>.right{opacity:.55}
 .enter .count{animation:pop .5s var(--spring) .25s backwards}
 .enter .day::after{transform-origin:left;animation:growX .7s var(--out) backwards}
 .nav button[aria-current="page"]{animation:pop .45s var(--spring)}
+
+/* ===== Móvil: sin cursor, la respuesta llega al tocar. Solo transform/opacity (van por la GPU) y todo corto ===== */
+html{-webkit-tap-highlight-color:transparent}
+button,.link,.list li,.tile{touch-action:manipulation}
+/* secciones que quedan fuera de pantalla: aparecen al hacer scroll */
+.reveal{opacity:0;transform:translateY(26px) scale(.98);transition:opacity .5s var(--out),transform .65s var(--spring)}
+.reveal.in{opacity:1;transform:none}
+.enter .sec.reveal{animation:none}
+@media (hover:none){
+  .alert{animation:none} /* el brillo con sombra obliga a repintar en cada fotograma: demasiado para un móvil */
+  .tile:active{transform:translateY(calc(var(--ty) - 10px)) rotate(0deg) scale(1.14);transition-duration:.15s;z-index:1}
+  .list li:not(.empty):active{background-size:100% 100%;transition-duration:.2s}
+  .list li:active .mag-dot{transform:scale(1.1) rotate(-6deg)}
+  .check:not(:disabled):active{transform:scale(.8) rotate(-8deg)}
+  .x:active svg{transform:rotate(90deg) scale(1.15)}
+  .x svg{transition:transform .3s var(--spring)}
+  .chip:active,.state:active,.count:active,.you:active{transform:scale(1.12)}
+  .link:active{transform:translateX(3px)}
+  .logo-btn:active .logo{transform:rotate(-8deg) scale(1.1)}
+  .menu button:active{box-shadow:inset 3px 0 0 var(--accent);background:var(--accent-soft)}
+}
 @media (prefers-reduced-motion:reduce){ *,*::before,*::after{animation:none!important;transition:none!important} }
 </style>
 </head>
@@ -843,7 +864,7 @@ function header(title){
     <span style="display:flex;gap:8px;align-items:center">
       <span class="status ${demo?'demo':''}"><i></i>${demo?'Datos de ejemplo':'Conectado'}</span>
       ${S.api.kind === 'supabase' ? (S.anon
-        ? `<button class="status" data-google aria-label="Iniciar sesión con Google" style="font-weight:800">${GOOGLE_G}Iniciar sesión</button>`
+        ? `<button class="status" data-google aria-label="Iniciar sesión con Google" style="font-weight:800;white-space:nowrap;flex:none">${GOOGLE_G}Entrar</button>`
         : `<button class="avatar" data-account aria-label="Menú de cuenta" aria-haspopup="true" aria-expanded="false">${avatarInner()}</button>`) : ''}
       <button class="status" data-go="ayuda" aria-label="Cómo funciona la app" style="font-weight:900">?</button>
     </span>${S.api.kind === 'supabase' && !S.anon ? `<div class="menu" id="userMenu" hidden>
@@ -914,11 +935,26 @@ document.addEventListener('pointerdown', e => {
   b.appendChild(rp); rp.addEventListener('animationend', () => rp.remove());
   setTimeout(() => rp.remove(), 800); // por si el botón se oculta a media animación y animationend no llega
 }, { passive:true });
-let ultimaVista = null, enterT;
+// Vibración mínima al tocar botones (Android; iOS la ignora)
+document.addEventListener('click', e => {
+  if (navigator.vibrate && matchMedia('(pointer:coarse)').matches && e.target.closest && e.target.closest('.btn:not(:disabled),.nav button,.pisos button,.check:not(:disabled)')) navigator.vibrate(6);
+});
+let ultimaVista = null, enterT, ioReveal;
 new MutationObserver(() => {
   if (S.tab === ultimaVista || app.querySelector('.loading')) return;
   ultimaVista = S.tab; app.classList.add('enter'); clearTimeout(enterT);
   enterT = setTimeout(() => app.classList.remove('enter'), 1300);
+  // Las notas que quedan por debajo de la pantalla aparecen cuando llegas a ellas (un solo observador, se libera al mostrarlas)
+  if (ioReveal) ioReveal.disconnect();
+  if (matchMedia('(prefers-reduced-motion: reduce)').matches || !('IntersectionObserver' in window)) return;
+  const abajo = [...app.querySelectorAll('.sec')].filter(el => el.getBoundingClientRect().top > innerHeight - 40);
+  if (!abajo.length) return;
+  ioReveal = new IntersectionObserver(es => es.forEach(en => {
+    if (!en.isIntersecting) return;
+    ioReveal.unobserve(en.target); en.target.classList.add('in');
+    setTimeout(() => en.target.classList.remove('reveal', 'in'), 900);
+  }), { threshold:.1, rootMargin:'0px 0px -60px 0px' });
+  abajo.forEach(el => { el.classList.add('reveal'); ioReveal.observe(el); });
 }).observe(app, { childList:true });
 function renderNav(){
   $('#navIn').innerHTML = TABS.map(([k,l]) => `<button data-tab="${k}" ${S.tab===k?'aria-current="page"':''}>${l}</button>`).join('');
