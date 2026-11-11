@@ -162,6 +162,8 @@ label{display:grid;gap:5px;font-size:14px;font-weight:700}
 textarea{width:100%;min-height:96px;padding:10px 12px;border-radius:10px;border:1.5px solid var(--line);background:var(--paper);color:var(--ink);font:inherit;resize:vertical}
 textarea:focus{outline:3px solid color-mix(in srgb, var(--accent) 35%, transparent);outline-offset:1px}
 .list li.norma{display:block}
+.sub-oculto{display:none!important}
+.subtabs{margin:0 0 12px}
 form.precio{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:8px}
 form.precio input{width:110px;flex:0 0 110px}
 .invitar summary{list-style:none;width:100%;display:flex;justify-content:center;align-items:center}
@@ -1032,7 +1034,7 @@ function bannerHtml(){
   const urgent = (S.bills || []).filter(b => !b.is_paused && daysUntil(b.next_due_date) < 3);
   if (!urgent.length) return '';
   const lines = urgent.slice(0,3).map(b => `${esc(b.name)} ${dueWords(daysUntil(b.next_due_date))}`).join('. ');
-  return `<button class="alert" data-go="facturas"><b>${urgent.length===1?'Una factura vence pronto':urgent.length+' facturas vencen pronto'}</b>${lines}.</button>`;
+  return `<button class="alert" data-go="facturas" data-subgo="facts"><b>${urgent.length===1?'Una factura vence pronto':urgent.length+' facturas vencen pronto'}</b>${lines}.</button>`;
 }
 // Solo se pintan fotos con el formato que genera la app (JPEG reducido) o las de Google; cualquier otra URL se ignora.
 function fotoSegura(url){
@@ -1071,6 +1073,7 @@ app.addEventListener('click', async e => {
   if (acc){ const m = $('#userMenu'); m.hidden = !m.hidden; acc.setAttribute('aria-expanded', String(!m.hidden)); return; }
   if (e.target.closest('[data-logout]')){ await S.sb.auth.signOut(); S.tab = 'piso'; await boot(false); return; }
   const g = e.target.closest('[data-go]'); if (!g) return;
+  if (g.dataset.subgo){ S.sub = S.sub || {}; S.sub[g.dataset.go] = g.dataset.subgo; }
   S.tab = g.dataset.go; S.editItem = null; S.editBill = null; S.normaForm = null; S.normaDel = null; S.avisoForm = false; S.avisoDel = null; S.gastoForm = false; S.gastoDel = null; S.echar = null; S.saldar = null; S.movDel = null; S.billForm = false; S.precioItem = null; S.histTodo = false; render(); window.scrollTo(0,0);
 });
 /* Animaciones: onda al pulsar y entrada al cambiar de pestaña */
@@ -1210,7 +1213,7 @@ function ajustesPisoHtml(apt){
   const elegir = admin && apt.owner_id && otros.length
     ? `<label style="margin:0 0 10px">Nuevo admin
         <select id="newOwner"><option value="">Elige a una persona…</option>${otros.map(m => `<option value="${esc(m.id)}">${esc(m.name)}</option>`).join('')}</select></label>` : '';
-  return `<section class="sec">
+  return `<section class="sec" id="ajustes">
     <h2>Ajustes del piso</h2>
     <div class="stack" style="margin-top:12px">
       <button class="btn danger" id="leave">Salir del piso</button>
@@ -1429,6 +1432,31 @@ function localNow(minutos = 0){
   const d = new Date(Date.now() + minutos*6e4); d.setSeconds(0,0);
   return new Date(d - d.getTimezoneOffset()*6e4).toISOString().slice(0,16);
 }
+/* Subpestañas dentro de cada sección, para no tener que bajar tanto */
+const SUBS = {
+  piso:     [['inicio','Inicio','#app .turno, #app .invitar'], ['comp','Compañeros','#comp'], ['ajustes','Ajustes','#ajustes']],
+  compra:   [['pend','Por comprar','[data-g="pend"]'], ['hechos','Ya comprado','[data-g="hechos"]']],
+  limpieza: [['semana','Esta semana','#semana'], ['zonas','Zonas','#zonas'], ['hist','Histórico','#hist']],
+  facturas: [['saldos','Saldos','#saldos'], ['movs','Movimientos','#movs'], ['facts','Facturas','#facts']]
+};
+function subActual(tab){ S.sub = S.sub || {}; const k = S.sub[tab]; return SUBS[tab].some(o => o[0] === k) ? k : SUBS[tab][0][0]; }
+function subtabsHtml(tab, counts = {}){
+  const cur = subActual(tab);
+  return `<div class="filtros subtabs" role="tablist" aria-label="Apartados">${SUBS[tab].map(([k,l]) =>
+    `<button type="button" class="filtro" role="tab" data-subtab="${k}" aria-selected="${k === cur}" aria-pressed="${k === cur}">${l}${counts[k] != null ? ` <span>${counts[k]}</span>` : ''}</button>`).join('')}</div>`;
+}
+function aplicarSub(tab){
+  const cur = subActual(tab);
+  SUBS[tab].forEach(([k,,sel]) => app.querySelectorAll(sel).forEach(el => {
+    el.classList.toggle('sub-oculto', k !== cur);
+    if (k === cur) el.classList.remove('reveal', 'in');
+  }));
+  app.querySelectorAll('[data-subtab]').forEach(b => {
+    const on = b.dataset.subtab === cur; b.setAttribute('aria-pressed', on); b.setAttribute('aria-selected', on);
+    b.onclick = () => { S.sub[tab] = b.dataset.subtab; aplicarSub(tab); window.scrollTo({top:0}); };
+  });
+}
+
 // Tablón: avisos y normas del piso en una misma pestaña
 async function renderTablonTab(){
   const sub = S.tablonSub === 'normas' ? 'normas' : 'avisos';
@@ -1632,7 +1660,7 @@ async function renderPiso(){
   try{ asg = await S.api.assignments(apt.id, iso(curMonday())); }catch{ asg = null; }
   if (S.tab !== 'piso' || S.apt !== apt) return;
   const tiles = apt.invite_code.split('').map((c,i) => `<span class="tile mag m${(i%6)+1}">${esc(c)}</span>`).join('');
-  app.innerHTML = `${header(apt.name)}${turnoHtml(asg)}
+  app.innerHTML = `${header(apt.name)}${subtabsHtml('piso', {comp:S.members.length})}${turnoHtml(asg)}
     <section class="sec invitar">
       <details id="invDet" ${S.showInvite || S.members.length < 2 ? 'open' : ''}>
       <summary class="btn ghost">Invitar a alguien</summary>
@@ -1651,7 +1679,7 @@ async function renderPiso(){
       </div>
       </details>
     </section>
-    <section class="sec">
+    <section class="sec" id="comp">
       <div class="sec-head"><h2>Compañeros</h2><span class="count">${S.members.length}</span></div>
       <ul class="list">${S.members.map(m => {
         const puedeEchar = m.id !== S.api.uid && m.id !== apt.owner_id;
@@ -1672,6 +1700,7 @@ async function renderPiso(){
     </section>
     ${ajustesPisoHtml(apt)}`;
   bindAjustesPiso(apt);
+  aplicarSub('piso');
   app.querySelectorAll('[data-echar]').forEach(b => b.onclick = async () => {
     S.echar = b.dataset.echar; S.echarSaldo = null;
     try{ S.echarSaldo = await S.api.balances(apt.id); }catch{}
@@ -1759,18 +1788,25 @@ async function renderCompra(){
   const bloque = (et, lista) => `<div class="day">${esc(et)} <span class="n">${lista.length}</span></div>
     <ul class="list">${lista.map(filaCompra).join('')}</ul>`;
 
-  app.innerHTML = `${header('Compra común')}
+  app.innerHTML = `${header('Compra común')}${subtabsHtml('compra', {pend:pend.length, hechos:comprados.length})}
     <section class="sec">
-      <div class="sec-head"><h2>Lista de la compra</h2><span class="count">${pend.length} por comprar</span></div>
-      <p class="sub">Lo que falta en casa, agrupado por el día en que se apuntó.</p>
+      <div data-g="pend">
+      <div class="sec-head"><h2>Por comprar</h2><span class="count">${pend.length}</span></div>
+      <p class="sub">Lo que falta en casa, agrupado por el día en que se apuntó. Tacha lo que compres.</p>
       <form class="row" id="fItem" style="margin-bottom:4px">
         <input id="itemName" maxlength="80" placeholder="Añadir producto: leche, pan…" aria-label="Producto" required>
         <button class="btn" type="submit">Añadir</button>
       </form>
       ${pend.length ? dias.map(d => bloque(d.et, d.items)).join('')
         : '<p class="empty">Nada pendiente. La nevera está a salvo.</p>'}
-      ${comprados.length ? bloque('Ya comprado', comprados) + '<p class="small dim" style="margin:6px 2px 0">Si tachaste algo por error, vuelve a pulsarlo y regresa a la lista.</p>' : ''}
+      </div>
+      <div data-g="hechos">
+      <div class="sec-head"><h2>Ya comprado</h2><span class="count">${comprados.length}</span></div>
+      ${comprados.length ? `<ul class="list">${comprados.map(filaCompra).join('')}</ul>` + '<p class="small dim" style="margin:6px 2px 0">Si tachaste algo por error, vuelve a pulsarlo y regresa a «Por comprar». Si lo compraste tú, puedes anotar lo que costó.</p>'
+        : '<p class="empty">Todavía no se ha tachado nada.</p>'}
+      </div>
     </section>`;
+  aplicarSub('compra');
 
   $('#fItem').onsubmit = e => run(e, async () => { await S.api.addItem(S.apt.id, $('#itemName').value.trim()); await renderCompra(); });
   app.querySelectorAll('[data-b]').forEach(b => b.onclick = async () => {
@@ -1832,7 +1868,7 @@ function turnoHtml(asg){
   const range = weekRange(curMonday());
   if (S.members.length < 2) return `<section class="turno vacio" aria-live="polite"><div class="turno-top"><b>Tu turno de limpieza</b></div><p>${esc(SOLO_UNO)}</p></section>`;
   if (!asg.length) return `<section class="turno vacio" aria-live="polite"><div class="turno-top"><b>Tu turno de limpieza</b></div>
-    <p>Todavía no hay rotación esta semana. Define las zonas del piso y se generará sola.</p><button class="link" data-go="limpieza">Ir a Limpieza</button></section>`;
+    <p>Todavía no hay rotación esta semana. Define las zonas del piso y se generará sola.</p><button class="link" data-go="limpieza" data-subgo="zonas">Ir a Limpieza</button></section>`;
   const mine = asg.filter(a => a.user_id === S.api.uid);
   if (!mine.length) return `<section class="turno vacio" aria-live="polite"><div class="turno-top"><b>Esta semana no tienes turno</b></div>
     <p>No se te ha asignado ninguna zona (semana del ${esc(range)}). No tienes que hacer nada.</p></section>`;
@@ -1853,8 +1889,8 @@ function doneLabel(when){
   return 'Hecha el ' + d.toLocaleDateString('es-ES',{weekday:'short',day:'numeric'});
 }
 function historicoHtml(hist, currentWeek){
-  if (hist === null) return `<section class="sec"><h2>Histórico de limpieza</h2><p class="sub">No se ha podido cargar el histórico. Prueba a actualizar.</p><button class="btn ghost small" id="histRefresh">Actualizar</button></section>`;
-  if (!hist.length) return `<section class="sec"><div class="sec-head"><h2>Histórico de limpieza</h2><button class="link" id="histRefresh">Actualizar</button></div>
+  if (hist === null) return `<section class="sec" id="hist"><h2>Histórico de limpieza</h2><p class="sub">No se ha podido cargar el histórico. Prueba a actualizar.</p><button class="btn ghost small" id="histRefresh">Actualizar</button></section>`;
+  if (!hist.length) return `<section class="sec" id="hist"><div class="sec-head"><h2>Histórico de limpieza</h2><button class="link" id="histRefresh">Actualizar</button></div>
     <p class="sub">Aún no hay turnos registrados. Cuando pase la primera semana verás aquí quién ha cumplido.</p></section>`;
   const weeks = []; hist.forEach(h => { let w = weeks.find(x => x.week === h.week); if (!w){ w = {week:h.week, rows:[]}; weeks.push(w); } w.rows.push(h); });
   const cumple = new Map();
@@ -1884,8 +1920,8 @@ async function renderLimpieza(){
   const done = asg.filter(a => a.is_done).length;
   const end = new Date(curMonday()); end.setDate(end.getDate()+6);
   const range = `${curMonday().toLocaleDateString('es-ES',{day:'numeric',month:'short'})} – ${end.toLocaleDateString('es-ES',{day:'numeric',month:'short'})}`;
-  app.innerHTML = `${header('Limpieza')}
-    <section class="sec">
+  app.innerHTML = `${header('Limpieza')}${subtabsHtml('limpieza')}
+    <section class="sec" id="semana">
       <div class="sec-head"><h2>Esta semana</h2><span class="count">${done} de ${asg.length} hechas</span></div>
       <p class="sub">Semana del ${esc(range)}. Cada lunes las zonas pasan al compañero anterior de la lista y nadie repite la zona de la semana pasada. El reparto se genera la primera vez que alguien abre la app esa semana.</p>
       ${descansan.length ? `<p class="sub" style="margin-top:-4px">Sin zona esta semana: <b>${esc(descansan.join(', '))}</b>. El descanso también va rotando.</p>` : ''}
@@ -1897,7 +1933,7 @@ async function renderLimpieza(){
               <span class="state ${a.is_done?'ok':''}">${a.is_done ? esc(doneLabel(a.done_at)) : 'Pendiente'}</span></span></span></li>`; }).join('')
         : `<li class="empty">${S.members.length < 2 ? esc(SOLO_UNO) : (zones.length ? 'Todavía no hay reparto esta semana. Recarga la página.' : 'Define las zonas de la casa y aquí aparecerá quién limpia cada una.')}</li>`}</ul>
     </section>
-    <section class="sec">
+    <section class="sec" id="zonas">
       <h2>Zonas de limpieza</h2>
       <p class="sub">Las zonas que hay que mantener limpias.</p>
       <form class="row" id="fZone"><input id="zoneName" maxlength="40" placeholder="Baño, cocina, salón…" aria-label="Nueva zona" required><button class="btn" type="submit">Añadir</button></form>
@@ -1905,6 +1941,7 @@ async function renderLimpieza(){
         <li><span class="grow name">${esc(z.name)}</span><button class="x" data-z="${esc(z.id)}" aria-label="Quitar ${esc(z.name)}">${CROSS}</button></li>`).join('')}</ul>
     </section>
     ${historicoHtml(hist, week)}`;
+  aplicarSub('limpieza');
   const hm = $('#histMas'); if (hm) hm.onclick = async () => { S.histTodo = true; await renderLimpieza(); $('#hist')?.scrollIntoView({block:'start'}); };
   const hr = $('#histRefresh'); if (hr) hr.onclick = async () => { hr.disabled = true; try{ await renderLimpieza(); toast('Histórico actualizado.'); }catch(err){ toast(friendly(err)); } };
   $('#fZone').onsubmit = e => run(e, async () => { await S.api.addZone(S.apt.id, $('#zoneName').value.trim()); await renderLimpieza(); });
@@ -2149,7 +2186,8 @@ async function renderFacturas(){
     ...gastos.map(g => ({tipo:'factura', key:'f:' + g.id, date:g.date, ts:g.date + '|', g, pagos})),
     ...pays.map(p => { const d = iso(new Date(p.paid_at)); return {tipo:'pago', key:'p:' + p.id, id:p.id, date:d, ts:d + '|' + p.paid_at, from:p.from_user, to:p.to_user, amount:Number(p.amount), created_by:p.created_by}; })
   ].sort((a,b) => b.ts.localeCompare(a.ts));
-  app.innerHTML = `${header('Gastos y facturas')}${saldosHtml(bal)}${movimientosHtml(mov)}${facturasHtml(bills, pagos)}`;
+  app.innerHTML = `${header('Gastos y facturas')}${subtabsHtml('facturas', {movs:mov.length, facts:bills.length})}${saldosHtml(bal)}${movimientosHtml(mov)}${facturasHtml(bills, pagos)}`;
+  aplicarSub('facturas');
   bindGastos(bills, mov);
 }
 
