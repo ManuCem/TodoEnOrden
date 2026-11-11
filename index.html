@@ -462,7 +462,7 @@ function friendly(err){
 const CHECK = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7"/></svg>';
 const PENCIL = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20l4-1 11-11-3-3L5 16l-1 4z"/><path d="M14 7l3 3"/></svg>';
 const CROSS = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>';
-const TABS = [['piso','Piso'],['compra','Compra'],['limpieza','Limpieza'],['facturas','Facturas'],['normas','Normas'],['avisos','Avisos']];
+const TABS = [['piso','Piso'],['compra','Compra'],['limpieza','Limpieza'],['facturas','Gastos'],['normas','Normas'],['avisos','Avisos']];
 /* color de imán de cada compañero: el orden de entrada al piso decide */
 const mc = id => 'm' + (((S.members.findIndex(m => m.id === id) + 6) % 6) + 1);
 
@@ -568,6 +568,19 @@ function remoteApi(sb, uid){
       const rows = ok(await sb.from('recurring_bills').update(fields).eq('id', billId).select('id'));
       if (!rows || !rows.length) throw new Error('No tienes permiso para modificar esta factura.');
     },
+    // TEO-28: gastos anotados a mano (los de facturas van aparte). Se reparten a partes iguales.
+    async expenses(aptId){
+      const rows = ok(await sb.from('expenses').select('id,description,amount,expense_date,paid_by,created_by,created_at,expense_shares(user_id,amount)')
+        .eq('apartment_id', aptId).is('recurring_bill_id', null).is('deleted_at', null)
+        .order('expense_date',{ascending:false}).order('created_at',{ascending:false}).limit(50));
+      return rows.map(e => ({id:e.id, name:e.description, amount:Number(e.amount), date:e.expense_date, paid_by:e.paid_by, created_by:e.created_by,
+        shares:(e.expense_shares || []).map(x => ({user_id:x.user_id, amount:Number(x.amount)}))}));
+    },
+    async addExpense(aptId, g){
+      return ok(await sb.rpc('create_expense', {p_apartment_id:aptId, p_description:g.description, p_amount:g.amount, p_paid_by:g.paid_by,
+        p_split_type:'equal', p_participants:g.participants, p_expense_date:g.date}));
+    },
+    async delExpense(expenseId){ ok(await sb.rpc('delete_expense', {p_expense_id:expenseId})); },
     // Tablón de avisos: los vencidos no llegan (los filtra la base de datos); solo el autor elimina
     async notices(aptId){ return ok(await sb.rpc('list_bulletin_notices', {p_apartment_id:aptId})) || []; },
     async addNotice(aptId, n){ ok(await sb.from('bulletin_notices').insert({apartment_id:aptId, title:n.title, content:n.content, expires_at:n.expires_at})); },
@@ -590,7 +603,7 @@ function remoteApi(sb, uid){
     async generateDue(aptId){ return ok(await sb.rpc('generate_due_bills',{p_apartment_id:aptId})) || 0; },
     async billExpenses(aptId){
       const rows = ok(await sb.from('expenses').select('id,description,amount,expense_date,paid_by,recurring_bill_id,created_at,expense_shares(user_id,amount)')
-        .eq('apartment_id', aptId).not('recurring_bill_id','is',null).order('expense_date',{ascending:false}).order('created_at',{ascending:false}).limit(20));
+        .eq('apartment_id', aptId).not('recurring_bill_id','is',null).is('deleted_at', null).order('expense_date',{ascending:false}).order('created_at',{ascending:false}).limit(20));
       return rows.map(e => ({id:e.id, name:e.description, amount:Number(e.amount), date:e.expense_date, paid_by:e.paid_by, bill_id:e.recurring_bill_id,
         shares:(e.expense_shares || []).map(x => ({user_id:x.user_id, amount:Number(x.amount)})).sort((a,b) => (b.user_id===e.paid_by) - (a.user_id===e.paid_by))}));
     },
@@ -641,7 +654,7 @@ function demoApi(clave){
     bills: P.facturas.map(([name,amount,frequency,dias,quien,pausada],i) => ({
       id:'b'+i, name, amount, frequency, next_due_date: iso(new Date(Date.now()+dias*864e5)),
       paid_by: uid(quien), is_paused: !!pausada })),
-    pagos: [], gastos: [], rules: [], rulesLog: [], notices: [], n: 100
+    pagos: [], gastos: [], rules: [], rulesLog: [], notices: [], manual: [], n: 100
   };
   // una tarea de la semana ya hecha, para que la demo no salga vacía
   const w = iso(mondayOf());
@@ -657,6 +670,14 @@ function demoApi(clave){
     db.gastos.push({id:id('e'), name:b.name, amount:Number(b.amount), date, paid_by:b.paid_by, bill_id:b.id,
       shares: parts.map((m,i) => ({user_id:m.id, amount:(base + (i < rem ? 1 : 0))/100}))});
   };
+  // gastos sueltos de ejemplo
+  const repartir = (amount, parts) => { const c = Math.round(amount*100), b = Math.floor(c/parts.length), r = c % parts.length;
+    return parts.map((u,i) => ({user_id:u, amount:(b + (i < r ? 1 : 0))/100})); };
+  [['Cena del viernes', 36.5, 1, 1, null], ['Bombillas y pilas', 12.9, 4, 0, null], ['Detergente', 7.45, 6, 2, 'sinUno']].forEach(([name, amount, dias, k, modo]) => {
+    const payer = db.members[k % db.members.length].id;
+    const parts = modo === 'sinUno' && db.members.length > 2 ? db.members.slice(0,-1).map(m => m.id) : db.members.map(m => m.id);
+    db.manual.push({id:id('g'), name, amount, date:iso(new Date(Date.now() - dias*864e5)), paid_by:payer, created_by:payer, created_at:new Date(Date.now() - dias*864e5).toISOString(), shares:repartir(amount, parts)});
+  });
   // avisos de ejemplo (uno ya vencido, que no se ve)
   [['Semana de exámenes','Del lunes al viernes, silencio a partir de las 22:00. ¡Gracias!', 1, 4, 0],
    ['Viene el fontanero','El jueves por la mañana vienen a mirar la caldera. Alguien tiene que estar en casa.', 0, 2, 1],
@@ -732,6 +753,17 @@ function demoApi(clave){
     payShare:(a,billId,due)=>{ db.pagos.push({bill_id:billId,user_id:me,due_date:due}); return wait(); },
     unpayShare:(billId,due)=>{ db.pagos = db.pagos.filter(p=>!(p.bill_id===billId && p.due_date===due && p.user_id===me)); return wait(); },
     updateBill:(billId, fields)=>{ const b = db.bills.find(x => x.id === billId); if (!b) return Promise.reject(new Error('No tienes permiso para modificar esta factura.')); Object.assign(b, fields); return wait(); },
+    expenses:()=>wait(db.manual.slice().sort((a,b) => b.date.localeCompare(a.date) || b.created_at.localeCompare(a.created_at)).map(g => ({...g, shares:g.shares.map(x => ({...x}))}))),
+    addExpense:(a, g)=>{
+      if (!(g.amount > 0)) return Promise.reject(new Error('El importe debe ser mayor que 0'));
+      if (!g.participants || !g.participants.length) return Promise.reject(new Error('Tiene que haber al menos un participante'));
+      if (!db.members.some(m => m.id === g.paid_by)) return Promise.reject(new Error('El pagador no pertenece al piso'));
+      db.manual.push({id:id('g'), name:g.description, amount:Math.round(g.amount*100)/100, date:g.date, paid_by:g.paid_by, created_by:me, created_at:new Date().toISOString(), shares:repartir(g.amount, g.participants)});
+      return wait(); },
+    delExpense:(gid)=>{ const k = db.manual.findIndex(g => g.id === gid);
+      if (k < 0) return Promise.reject(new Error('Ese gasto no existe o no es de tu piso'));
+      if (db.manual[k].created_by !== me) return Promise.reject(new Error('Solo quien anotó el gasto puede eliminarlo'));
+      db.manual.splice(k,1); return wait(); },
     notices:()=>{ const ahora = Date.now();
       return wait(db.notices.filter(n => !n.expires_at || new Date(n.expires_at) > ahora).sort((a,b) => b.created_at.localeCompare(a.created_at))
         .map(n => ({...n, author_name: db.members.find(m => m.id === n.user_id)?.name || null}))); },
@@ -952,7 +984,7 @@ app.addEventListener('click', async e => {
   if (acc){ const m = $('#userMenu'); m.hidden = !m.hidden; acc.setAttribute('aria-expanded', String(!m.hidden)); return; }
   if (e.target.closest('[data-logout]')){ await S.sb.auth.signOut(); S.tab = 'piso'; await boot(false); return; }
   const g = e.target.closest('[data-go]'); if (!g) return;
-  S.tab = g.dataset.go; S.editItem = null; S.editBill = null; S.normaForm = null; S.normaDel = null; S.avisoForm = false; S.avisoDel = null; render(); window.scrollTo(0,0);
+  S.tab = g.dataset.go; S.editItem = null; S.editBill = null; S.normaForm = null; S.normaDel = null; S.avisoForm = false; S.avisoDel = null; S.gastoForm = false; S.gastoDel = null; render(); window.scrollTo(0,0);
 });
 /* Animaciones: onda al pulsar y entrada al cambiar de pestaña */
 document.addEventListener('pointerdown', e => {
@@ -988,7 +1020,7 @@ new MutationObserver(() => {
 function renderNav(){
   $('#navIn').innerHTML = TABS.map(([k,l]) => `<button data-tab="${k}" ${S.tab===k?'aria-current="page"':''}>${l}</button>`).join('');
   document.body.dataset.tab = S.tab;
-  $('#navIn').querySelectorAll('button').forEach(b => b.onclick = () => { S.tab = b.dataset.tab; S.editItem = null; S.editBill = null; S.normaForm = null; S.normaDel = null; S.avisoForm = false; S.avisoDel = null; render(); window.scrollTo(0,0); });
+  $('#navIn').querySelectorAll('button').forEach(b => b.onclick = () => { S.tab = b.dataset.tab; S.editItem = null; S.editBill = null; S.normaForm = null; S.normaDel = null; S.avisoForm = false; S.avisoDel = null; S.gastoForm = false; S.gastoDel = null; render(); window.scrollTo(0,0); });
 }
 async function render(){
   if (S.tab === 'perfil' && !(S.api.kind === 'supabase' && !S.anon)) S.tab = 'piso';
@@ -1723,7 +1755,7 @@ const PASOS = [
   ['1','Crea tu piso o únete','Quien monta el piso recibe un código de 6 letras. Los demás lo escriben una vez y ya están dentro. Todos veis lo mismo al instante.'],
   ['2','Apuntad la compra','Cualquiera añade lo que falta en casa. Quien va al súper lo va tachando, y al lado queda su nombre para que se sepa quién ha ido.'],
   ['3','Repartid la limpieza','Definís las zonas una vez y la app reparte los turnos cada semana, rotando para que no le toque siempre lo mismo a la misma persona. Cada uno marca su tarea cuando la hace. Al abrir la app, una tarjeta te recuerda tu turno y el plazo, y en Limpieza tienes el histórico de quién ha cumplido.'],
-  ['4','Controlad las facturas','Dad de alta la luz, el agua o el internet con su importe y cada cuánto se repiten. La app os avisa de los vencimientos y, el día que vence, crea sola el gasto repartido entre los del piso. Cada uno marca cuando ha pagado su parte.'],
+  ['4','Llevad las cuentas','Si alguien adelanta algo (una cena, la compra), lo anota en Gastos: quién pagó, cuánto y quién participa, y se reparte a partes iguales. Para las facturas, dad de alta la luz, el agua o el internet con su importe y cada cuánto se repiten. La app os avisa de los vencimientos y, el día que vence, crea sola el gasto repartido entre los del piso. Cada uno marca cuando ha pagado su parte.'],
   ['5','Poned las normas del piso','En Normas apuntáis lo que acordáis entre todos: horarios de silencio, visitas, cocina… Cualquiera puede añadir, editar o eliminar una norma, y todo queda anotado en la actividad.'],
   ['6','Usad el tablón de avisos','En Avisos publicáis lo que tienen que saber todos: visitas, cortes de agua, exámenes… Si le ponéis fecha de finalización, desaparece solo a esa hora. Solo quien lo publica puede borrarlo.'],
   ['7','Compartid el enlace','La app se abre desde el navegador del móvil, sin instalar nada. Pásale el enlace a tus compañeros.']
@@ -1760,8 +1792,95 @@ function dayLabel(when){
   return d.toLocaleDateString('es-ES',{weekday:'short',day:'numeric',month:'short'});
 }
 const REPITE = {weekly:'cada semana',monthly:'cada mes',bimonthly:'cada 2 meses',quarterly:'cada 3 meses',yearly:'cada año'};
+/* TEO-28: anotar un gasto (quién pagó, importe y quién participa). El reparto a partes
+   iguales y las comprobaciones las hace create_expense en Supabase. */
+function gastosManualesHtml(lista){
+  const yo = S.api.uid;
+  const nombre = idu => idu === yo ? 'Tú' : (S.members.find(m => m.id === idu)?.name || 'Antiguo compañero');
+  const hoy = iso(new Date());
+  const form = S.gastoForm ? `
+    <form id="fGasto" novalidate style="display:grid;gap:12px;margin-top:6px">
+      <h3 class="wk" style="margin:0">Nuevo gasto</h3>
+      <label>Concepto (opcional)<input id="gConcepto" maxlength="80" placeholder="Cena del viernes"></label>
+      <div class="row" style="display:grid;grid-template-columns:1fr 1fr;gap:10px;align-items:start">
+        <label>Importe (€)<input id="gImporte" type="number" inputmode="decimal" min="0.01" step="0.01" placeholder="24,50" aria-describedby="eImporte">
+          <small class="err" id="eImporte" role="alert" hidden></small></label>
+        <label>Fecha<input id="gFecha" type="date" value="${hoy}" max="${hoy}"><small class="err" id="eFecha" role="alert" hidden></small></label>
+      </div>
+      <label>¿Quién pagó?<select id="gPayer">${S.members.map(m => `<option value="${esc(m.id)}" ${m.id === yo ? 'selected' : ''}>${esc(m.id === yo ? m.name + ' (tú)' : m.name)}</option>`).join('')}</select></label>
+      <fieldset id="gPart" style="border:1.5px solid var(--line);border-radius:10px;padding:10px 12px;margin:0">
+        <legend style="font-weight:800;padding:0 4px">¿Quién participa?</legend>
+        ${S.members.map(m => `<label style="display:flex;align-items:center;gap:10px;min-height:40px;font-weight:600"><input type="checkbox" value="${esc(m.id)}" checked style="width:22px;height:22px;min-height:0"> ${esc(m.id === yo ? m.name + ' (tú)' : m.name)}</label>`).join('')}
+        <small class="err" id="ePart" role="alert" hidden></small>
+      </fieldset>
+      <p class="small dim" id="gPreview" style="margin:0" aria-live="polite"></p>
+      <div style="display:flex;gap:10px;flex-wrap:wrap">
+        <button class="btn" type="submit">Guardar gasto</button>
+        <button class="btn ghost" type="button" id="gCancel">Cancelar</button>
+      </div>
+    </form>` : '<button class="btn" id="gAdd">Anotar gasto</button>';
+  const items = lista === null ? '<p class="err" role="alert">No se han podido cargar los gastos. Recarga la página.</p>'
+    : !lista.length ? '<p class="empty" style="margin-top:12px">Todavía no hay gastos anotados.</p>'
+    : `<ul class="list receipt" style="margin-top:12px">${lista.map(g => {
+        const iguales = g.shares.length && g.shares.every(x => Math.abs(x.amount - g.shares[g.shares.length-1].amount) < 0.015);
+        return `<li style="display:block"><span style="display:flex;gap:10px;justify-content:space-between;align-items:flex-start">
+          <span style="min-width:0"><span class="name">${esc(g.name)}</span><br>
+            <span class="small dim">${esc(fmtDate(g.date))} · pagó ${esc(nombre(g.paid_by).replace(/^Tú$/,'tú'))}</span></span>
+          <span class="right"><span class="amount">${eur(g.amount)}</span><span class="small dim">${g.shares.length} ${g.shares.length === 1 ? 'persona' : 'personas'}${iguales ? ' × ' + eur(g.shares[g.shares.length-1].amount) : ''}</span></span></span>
+          <span class="meta-line">${g.shares.map(x => `<span class="state ${x.user_id === g.paid_by ? 'ok' : ''}">${esc(nombre(x.user_id))} ${eur(x.amount)}</span>`).join('')}</span>
+          ${g.created_by !== yo ? '' : S.gastoDel === g.id ? `<div class="confirm" role="alertdialog" aria-label="Confirmar eliminación">
+              <span>¿Eliminar «${esc(g.name)}» (${eur(g.amount)})? Dejará de contar en los saldos.</span>
+              <span class="row"><button class="btn small danger" data-gdel-ok="${esc(g.id)}">Sí, eliminar</button><button class="btn small ghost" data-gdel-no>Cancelar</button></span></div>`
+            : `<span class="acts"><button type="button" class="link" data-gdel="${esc(g.id)}" aria-label="Eliminar el gasto ${esc(g.name)}">Eliminar</button></span>`}
+        </li>`; }).join('')}</ul>`;
+  return `<section class="sec" id="gastosMan">
+    <div class="sec-head"><h2>Gastos anotados</h2><span class="count">${lista ? lista.length : 0}</span></div>
+    <p class="sub">Lo que alguien adelanta para el piso (una cena, la compra, una bombilla). Se reparte a partes iguales entre quienes participan y cuenta en los saldos.</p>
+    ${form}${items}
+  </section>`;
+}
+function bindGastosManuales(){
+  const add = $('#gAdd'); if (add) add.onclick = async () => { S.gastoForm = true; S.gastoDel = null; await renderFacturas(); $('#gImporte')?.focus(); };
+  app.querySelectorAll('[data-gdel]').forEach(b => b.onclick = async () => { S.gastoDel = b.dataset.gdel; await renderFacturas(); });
+  app.querySelectorAll('[data-gdel-no]').forEach(b => b.onclick = async () => { S.gastoDel = null; await renderFacturas(); });
+  app.querySelectorAll('[data-gdel-ok]').forEach(b => b.onclick = async () => {
+    b.disabled = true;
+    try{ await S.api.delExpense(b.dataset.gdelOk); toast('Gasto eliminado.'); }catch(err){ toast(friendly(err)); }
+    S.gastoDel = null; await renderFacturas();
+  });
+  const f = $('#fGasto'); if (!f) return;
+  const marcados = () => [...f.querySelectorAll('#gPart input:checked')].map(i => i.value);
+  const preview = () => {
+    const a = parseFloat($('#gImporte').value), n = marcados().length;
+    $('#gPreview').textContent = a > 0 && n ? `${n === 1 ? 'Una persona' : n + ' personas'}: ${eur(Math.floor(Math.round(a*100)/n)/100)}${Math.round(a*100) % n ? ' aprox.' : ''} cada una.` : '';
+  };
+  $('#gImporte').addEventListener('input', () => { clearFieldError('gImporte'); preview(); });
+  $('#gFecha').addEventListener('input', () => clearFieldError('gFecha'));
+  f.querySelectorAll('#gPart input').forEach(i => i.addEventListener('change', () => { clearFieldError('gPart'); preview(); }));
+  $('#gCancel').onclick = async () => { S.gastoForm = false; await renderFacturas(); };
+  const fail = (idc, msg) => { const er = document.getElementById('e' + idc.slice(1)); er.textContent = msg; er.hidden = false; const el = document.getElementById(idc); el.setAttribute('aria-invalid','true'); return el; };
+  f.onsubmit = async e => {
+    e.preventDefault();
+    const amount = Math.round(parseFloat($('#gImporte').value) * 100) / 100, participants = marcados(), date = $('#gFecha').value || iso(new Date());
+    let first = null; const mark = el => { if (!first) first = el; };
+    if (!(amount > 0)) mark(fail('gImporte', 'Falta el importe (debe ser un número mayor que 0).'));
+    else if (amount > 100000) mark(fail('gImporte', 'El importe es demasiado alto. Revisa la cifra.'));
+    if (!participants.length) mark(fail('gPart', 'Debes indicar al menos un participante.'));
+    if (date > iso(new Date())) mark(fail('gFecha', 'La fecha no puede ser futura.'));
+    if (first){ (first.tagName === 'FIELDSET' ? first.querySelector('input') : first).focus(); return; }
+    const btn = f.querySelector('button[type=submit]'); btn.disabled = true;
+    const description = $('#gConcepto').value.trim() || 'Gasto sin concepto';
+    try{
+      await S.api.addExpense(S.apt.id, {description, amount, paid_by:$('#gPayer').value, participants, date});
+      S.gastoForm = false; toast(`Gasto anotado: ${eur(amount)} entre ${participants.length}.`);
+      await renderFacturas();
+    }catch(err){ btn.disabled = false; toast(friendly(err)); }   // el formulario conserva lo escrito
+  };
+}
+
 async function renderFacturas(){
   await autoExpenses();
+  const manuales = S.api.expenses ? await S.api.expenses(S.apt.id).catch(() => null) : [];
   const [bills, pagos, gastos] = await Promise.all([S.api.bills(S.apt.id), S.api.billPayments(S.apt.id).catch(()=>[]), (S.api.billExpenses ? S.api.billExpenses(S.apt.id) : Promise.resolve([])).catch(()=>[])]);
   bills.sort((a,b) => (a.is_paused - b.is_paused) || a.next_due_date.localeCompare(b.next_due_date) || a.name.localeCompare(b.name,'es'));
   S.bills = bills;
@@ -1770,7 +1889,8 @@ async function renderFacturas(){
   if (!ed) S.editBill = null;
   const activas = bills.filter(b => !b.is_paused).length;
   const n = Math.max(S.members.length, 1);
-  app.innerHTML = `${header('Facturas')}
+  app.innerHTML = `${header('Gastos y facturas')}
+    ${gastosManualesHtml(manuales)}
     <section class="sec">
       <div class="sec-head"><h2>Próximos vencimientos</h2><span class="count">${bills.length}</span></div>
       <p class="sub">Se repiten solas. El importe se divide entre los ${n === 1 ? 'del piso' : n + ' compañeros'} y cada uno marca su parte.</p>
@@ -1896,6 +2016,7 @@ async function renderFacturas(){
       await renderFacturas();
     }catch(err){ b.disabled = false; toast(friendly(err)); }
   });
+  bindGastosManuales();
 }
 
 boot(new URLSearchParams(location.search).has('demo'));
