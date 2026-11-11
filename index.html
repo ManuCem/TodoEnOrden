@@ -513,6 +513,12 @@ function remoteApi(sb, uid){
       if (r.error && hayFoto){ hayFoto = false; r = await q('full_name'); }
       return ok(r).map(x => ({id:x.user_id, name:x.profiles?.full_name || 'Sin nombre', avatar:x.profiles?.avatar_url || ''}));
     },
+    // Echar a alguien del piso (solo el admin; lo comprueba Supabase)
+    async removeMember(aptId, userId){ ok(await sb.rpc('remove_member', {p_apartment_id:aptId, p_user_id:userId})); },
+    async balances(aptId){
+      const rows = ok(await sb.from('apartment_balances').select('user_id,balance').eq('apartment_id', aptId));
+      return Object.fromEntries((rows || []).map(r => [r.user_id, Number(r.balance)]));
+    },
     async leave(aptId, nuevoAdmin){
       // leave_apartment pasa el admin a otra persona y borra el piso si eres la última; si aún no existe en Supabase, solo se sale
       const r = await sb.rpc('leave_apartment', { p_id: String(aptId), p_new_owner: nuevoAdmin || null });
@@ -714,7 +720,12 @@ function demoApi(clave){
     myName:()=>wait(db.myName), setName:n=>{ db.myName=n; db.members[0].name=n; return wait(); },
     apartment:()=>wait(db.apt), apartments:()=>wait(db.apt ? [db.apt] : []), createApartment:n=>{ db.apt={id:'apt-nuevo',name:n,invite_code:'M4R7TA'}; return wait(); },
     joinApartment:c=>{ const ok = Object.values(PISOS).some(p => p.code === c.toUpperCase()) || c.toUpperCase()===(db.apt?.invite_code||''); return ok ? wait() : Promise.reject(new Error('Código de piso no válido')); },
-    members:()=>wait(db.members.slice()), leave:()=>{ db.apt=null; return wait(); }, deleteApartment:()=>{ db.apt=null; return wait(); },
+    members:()=>wait(db.members.slice()),
+    removeMember:(a, idu)=>{ if (idu === me) return Promise.reject(new Error('No puedes echarte a ti: usa «Salir del piso»'));
+      const k = db.members.findIndex(m => m.id === idu); if (k < 0) return Promise.reject(new Error('Esa persona ya no está en el piso'));
+      db.members.splice(k,1); return wait(); },
+    balances:()=>wait(Object.fromEntries(db.members.map((m,i) => [m.id, i === 0 ? Number(P.saldo) || 0 : i === 1 ? -8.2 : 0]))),
+    leave:()=>{ db.apt=null; return wait(); }, deleteApartment:()=>{ db.apt=null; return wait(); },
     myBalance:()=>wait(P.saldo),
     items:()=>wait(db.items.slice().sort((a,b)=>a.is_bought-b.is_bought || b.created_at.localeCompare(a.created_at))),
     addItem:(a,name)=>{ if (db.items.some(i=>i.name.toLowerCase()===name.toLowerCase())) return Promise.reject({code:'23505',message:'dup'}); db.items.push({id:id('i'),name,is_bought:false,created_at:new Date().toISOString()}); return wait(); },
@@ -984,7 +995,7 @@ app.addEventListener('click', async e => {
   if (acc){ const m = $('#userMenu'); m.hidden = !m.hidden; acc.setAttribute('aria-expanded', String(!m.hidden)); return; }
   if (e.target.closest('[data-logout]')){ await S.sb.auth.signOut(); S.tab = 'piso'; await boot(false); return; }
   const g = e.target.closest('[data-go]'); if (!g) return;
-  S.tab = g.dataset.go; S.editItem = null; S.editBill = null; S.normaForm = null; S.normaDel = null; S.avisoForm = false; S.avisoDel = null; S.gastoForm = false; S.gastoDel = null; render(); window.scrollTo(0,0);
+  S.tab = g.dataset.go; S.editItem = null; S.editBill = null; S.normaForm = null; S.normaDel = null; S.avisoForm = false; S.avisoDel = null; S.gastoForm = false; S.gastoDel = null; S.echar = null; render(); window.scrollTo(0,0);
 });
 /* Animaciones: onda al pulsar y entrada al cambiar de pestaña */
 document.addEventListener('pointerdown', e => {
@@ -1020,7 +1031,7 @@ new MutationObserver(() => {
 function renderNav(){
   $('#navIn').innerHTML = TABS.map(([k,l]) => `<button data-tab="${k}" ${S.tab===k?'aria-current="page"':''}>${l}</button>`).join('');
   document.body.dataset.tab = S.tab;
-  $('#navIn').querySelectorAll('button').forEach(b => b.onclick = () => { S.tab = b.dataset.tab; S.editItem = null; S.editBill = null; S.normaForm = null; S.normaDel = null; S.avisoForm = false; S.avisoDel = null; S.gastoForm = false; S.gastoDel = null; render(); window.scrollTo(0,0); });
+  $('#navIn').querySelectorAll('button').forEach(b => b.onclick = () => { S.tab = b.dataset.tab; S.editItem = null; S.editBill = null; S.normaForm = null; S.normaDel = null; S.avisoForm = false; S.avisoDel = null; S.gastoForm = false; S.gastoDel = null; S.echar = null; render(); window.scrollTo(0,0); });
 }
 async function render(){
   if (S.tab === 'perfil' && !(S.api.kind === 'supabase' && !S.anon)) S.tab = 'piso';
@@ -1538,14 +1549,38 @@ async function renderPiso(){
     </section>
     <section class="sec">
       <div class="sec-head"><h2>Compañeros</h2><span class="count">${S.members.length}</span></div>
-      <ul class="list">${S.members.map(m => `
-        <li><span class="mag-dot mag ${mc(m.id)}">${dotInner(m)}</span>
+      <ul class="list">${S.members.map(m => {
+        const puedeEchar = esAdmin(apt) && m.id !== S.api.uid && m.id !== apt.owner_id;
+        const saldo = S.echar === m.id && S.echarSaldo ? S.echarSaldo[m.id] || 0 : 0;
+        return `
+        <li style="flex-wrap:wrap"><span class="mag-dot mag ${mc(m.id)}">${dotInner(m)}</span>
           <span class="grow name">${esc(m.name)}</span>
           ${apt.owner_id && m.id === apt.owner_id ? '<span class="you">Admin</span>' : ''}
-          ${m.id===S.api.uid ? '<span class="you">Tú</span>' : ''}</li>`).join('')}</ul>
+          ${m.id===S.api.uid ? '<span class="you">Tú</span>' : ''}
+          ${puedeEchar && S.echar !== m.id ? `<button type="button" class="link" data-echar="${esc(m.id)}" aria-label="Echar a ${esc(m.name)} del piso">Echar</button>` : ''}
+          ${puedeEchar && S.echar === m.id ? `<div class="confirm" role="alertdialog" aria-label="Confirmar" style="flex-basis:100%">
+            <span>¿Echar a <b>${esc(m.name)}</b> del piso? Dejará de verlo y sus turnos de limpieza pendientes pasarán a otros.${
+              Math.abs(saldo) >= 0.01 ? ` <b>Tiene un saldo de ${eur(saldo)}</b>: esa cuenta quedará sin saldar en la app.` : ''}
+              Si conserva el código del piso, podría volver a unirse.</span>
+            <span class="row"><button class="btn small danger" data-echar-ok="${esc(m.id)}">Sí, echar</button><button class="btn small ghost" data-echar-no>Cancelar</button></span></div>` : ''}
+        </li>`; }).join('')}</ul>
+      ${esAdmin(apt) && S.members.length > 1 ? `<p class="small dim" style="margin:8px 2px 0">${apt.owner_id ? 'Como admin, puedes echar a alguien del piso.' : 'Este piso no tiene admin: cualquiera puede echar a alguien.'}</p>` : ''}
     </section>
     ${ajustesPisoHtml(apt)}`;
   bindAjustesPiso(apt);
+  app.querySelectorAll('[data-echar]').forEach(b => b.onclick = async () => {
+    S.echar = b.dataset.echar; S.echarSaldo = null;
+    try{ S.echarSaldo = await S.api.balances(apt.id); }catch{}
+    await renderPiso();
+  });
+  app.querySelectorAll('[data-echar-no]').forEach(b => b.onclick = async () => { S.echar = null; await renderPiso(); });
+  app.querySelectorAll('[data-echar-ok]').forEach(b => b.onclick = async () => {
+    b.disabled = true;
+    const quien = S.members.find(m => m.id === b.dataset.echarOk)?.name || 'Esa persona';
+    try{ await S.api.removeMember(apt.id, b.dataset.echarOk); S.echar = null; toast(`${quien} ya no está en el piso.`); }
+    catch(err){ S.echar = null; toast(friendly(err)); }
+    await renderPiso();
+  });
   app.querySelectorAll('[data-turno]').forEach(b => b.onclick = async () => {
     b.disabled = true;
     try{ await S.api.setDone(b.dataset.turno, true); await renderPiso(); toast('Tarea marcada como hecha.'); }catch(err){ b.disabled = false; toast(friendly(err)); }
