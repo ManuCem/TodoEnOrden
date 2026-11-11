@@ -679,13 +679,53 @@ const PISOS = {
     facturas:[['Luz',72.4,'monthly',2,0,0],['Comunidad',45,'quarterly',6,0,0],['Internet',39.9,'monthly',16,1,0],
               ['Agua',28.15,'quarterly',-2,2,0],['Gas',51.3,'bimonthly',23,1,0],['Netflix',12.99,'monthly',9,2,0],
               ['Seguro del hogar',19.9,'monthly',1,0,1]], saldo:-12.5 },
+  // Piso de CUNEF: como un piso real que lleva semanas usando la app entre los cuatro
   cunef: { nombre:'Piso de CUNEF', code:'D5F011',
     miembros:['Ariadna','Manu','Gabi','Pablo'],
-    zonas:['Baño','Cocina','Pasillo','Salón','Escalera'],
-    compra:[['Arroz',0,0],['Aceite de oliva',0,0],['Bolsas de basura',0,1],['Café',0,1],['Fregasuelos',0,2],
-            ['Pasta',0,2],['Atún en lata',0,4],['Leche',1,0],['Cereales',1,1]],
+    zonas:['Baño grande','Baño pequeño','Cocina','Salón','Pasillo y entrada','Basura y reciclaje','Terraza'],
+    // [producto, comprado, hace días, quién lo compró, lo que costó]
+    compra:[['Leche semidesnatada',0,0],['Huevos (docena)',0,0],['Pan de molde',0,0],['Plátanos',0,0],
+            ['Café molido',0,1],['Papel higiénico',0,1],['Lavavajillas',0,1],
+            ['Pechuga de pollo',0,2],['Tomate frito',0,2],['Espaguetis',0,2],
+            ['Arroz',0,3],['Aceite de oliva',0,3],['Bolsas de basura',0,4],['Fregasuelos',0,4],['Atún en lata',0,5],['Esponjas',0,6],
+            ['Yogures',1,0,1,2.85],['Queso rallado',1,0,0],['Cereales',1,1,2,3.49],['Detergente para la ropa',1,1,0,7.95],
+            ['Manzanas',1,1,3],['Agua (6 botellas)',1,2,1,2.70],['Servilletas',1,2,2],['Lechuga',1,3,3,1.15],
+            ['Patatas',1,3,0,2.40],['Cebollas',1,4,1],['Sal',1,5,2,0.45],['Lejía',1,6,3,1.30]],
     facturas:[['Luz',96.3,'monthly',0,1,0],['Internet',42,'monthly',11,0,0],['Gas',54.8,'bimonthly',24,2,0],
-              ['Agua',31.2,'quarterly',38,3,0],['Comunidad',38,'monthly',5,0,0],['Spotify',17.99,'monthly',14,1,0]], saldo:26.4 },
+              ['Agua',31.2,'quarterly',38,3,0],['Comunidad',38,'monthly',5,0,0],['Spotify Familiar',17.99,'monthly',14,1,0],
+              ['Seguro del hogar',16.5,'monthly',8,2,0],['Netflix',13.99,'monthly',20,3,1]], saldo:26.4,
+    rico: {
+      // [concepto, importe, hace días, quién pagó, participantes (null = todos), reparto, valores]
+      gastos:[['Cena de bienvenida (pizzas)',48.6,40,1],['Productos de limpieza',23.75,33,0],['Bombillas LED',15.9,27,3],
+              ['Entradas del partido',36,24,2,[1,2,3]],['Compra grande del súper',87.42,20,0],['Regalo de cumpleaños de Pablo',45,16,1,[0,1,2]],
+              ['Bombona de butano',19.5,13,2],['Cena de sushi',64.8,9,3,null,'exact',[18.5,15.2,16.6,14.5]],
+              ['Tostadora nueva',29.99,6,0,null,'pct',[40,20,20,20]],['Taxi de vuelta de la fiesta',22.4,3,1,[0,1,3]],
+              ['Material para el piso (perchas)',12.3,1,2],['Desayuno del domingo',16.8,0,0]],
+      // [de, a, importe, hace días, quién lo anotó]
+      pagos:[[3,1,20,25,1],[0,2,12.5,10,0],[2,0,8,4,0],[3,0,15,2,3]],
+      // [título, texto, hace días, vence en días (null = sin fecha), autor]
+      avisos:[['Examen de Econometría el jueves','Esta semana tengo el examen más importante del cuatrimestre: por favor, silencio a partir de las 22:00. ¡Gracias!',1,3,2],
+              ['Viene el técnico de la caldera','Mañana entre las 9 y las 11 viene a revisar la caldera. ¿Alguien puede estar en casa? Yo tengo clase.',0,1,1],
+              ['Cena de cumpleaños de Pablo','El sábado a las 21:30 cenamos en casa para celebrarlo. Yo me encargo de la tarta; el resto, bebida y picoteo.',2,5,0],
+              ['El casero pasa a revisar el piso','Viene el lunes día 23 por la tarde. Toca dejar zonas comunes recogidas el fin de semana.',4,12,1],
+              ['Nueva contraseña del wifi','Está apuntada en la nevera. No la compartáis fuera del piso, porfa.',8,null,2],
+              ['Llaves de repuesto','Hay un juego de llaves de repuesto en el cajón de la entrada, debajo de los cargadores.',15,null,3],
+              ['Corte de agua','Hoy de 9 a 12 no habrá agua.',3,-1,0]],
+      // [título, texto, hace días, autor]
+      normas:[['Silencio entre semana','De domingo a jueves, nada de música alta ni llamadas en zonas comunes a partir de las 23:00.',40,0],
+              ['Visitas que se quedan a dormir','Se avisa en el Tablón con al menos un día de antelación y como mucho dos noches seguidas.',38,1],
+              ['Cocina recogida','Los platos se friegan el mismo día. La vitro y la encimera se limpian después de cocinar.',35,3],
+              ['Turnos de limpieza','Si no puedes hacer tu zona esa semana, cámbiala con alguien y avísalo en el Tablón.',30,2],
+              ['Compra común','Lo básico (aceite, sal, papel, limpieza) se paga entre todos; lo personal, cada uno.',22,0],
+              ['Calefacción','Máximo 21 °C y apagada al salir de casa. Por la noche, en 18 °C.',15,1]],
+      // [norma, hace días, quién la cambió, texto nuevo]
+      cambios:[[0,12,2,'De domingo a jueves, nada de música alta ni llamadas en zonas comunes a partir de las 23:00. En época de exámenes, desde las 22:00.'],
+               [2,5,0,'Los platos se friegan el mismo día. La vitro y la encimera se limpian después de cocinar, y la basura orgánica se baja cada noche.']],
+      // [título, texto, hace días creada, autor, hace días borrada, quién la borró]
+      borradas:[['Fiestas solo los viernes','Las fiestas en casa, solo los viernes y hasta las 2:00.',28,3,18,1]],
+      // zonas de esta semana ya hechas: [zona, hace horas]
+      hechas:[[0,30],[2,20],[3,8],[5,3]]
+    } },
   chamberi: { nombre:'Piso de Chamberí', code:'T3X9ZK',
     miembros:['Clara','Diego'],
     zonas:['Baño','Cocina','Salón'],
@@ -704,8 +744,8 @@ function demoApi(clave){
     myName: P.miembros[0],
     apt: { id:'apt-'+pisoDemo, name:P.nombre, invite_code:P.code },
     members: P.miembros.map((n,i) => ({ id:uid(i), name:n })),
-    items: P.compra.map(([name,b,dias],i) => ({ id:'i'+i, name, is_bought:!!b, created_at:new Date(Date.now()-(dias||0)*864e5 - i*36e5).toISOString(),
-      bought_by: b ? uid(i % P.miembros.length) : null, bought_at: b ? new Date(Math.min(Date.now()-6e5, Date.now()-(dias||0)*864e5 - i*36e5 + 72e5)).toISOString() : null })),
+    items: P.compra.map(([name,b,dias,quien,precio],i) => ({ id:'i'+i, name, is_bought:!!b, created_at:new Date(Date.now()-(dias||0)*864e5 - (i%5)*36e5).toISOString(), precio: b && precio ? precio : null,
+      bought_by: b ? uid(quien ?? (i % P.miembros.length)) : null, bought_at: b ? new Date(Math.min(Date.now()-6e5, Date.now()-(dias||0)*864e5 - i*36e5 + 72e5)).toISOString() : null })),
     zones: P.zonas.map((name,i) => ({ id:'z'+i, name })),
     done: {},
     bills: P.facturas.map(([name,amount,frequency,dias,quien,pausada],i) => ({
@@ -766,6 +806,70 @@ function demoApi(clave){
     crearGasto(b, prev);
     db.members.filter(m => m.id !== b.paid_by).forEach((m,k) => { if (j === 0 || (j === 1 && k === 0)) db.pagos.push({bill_id:b.id, user_id:m.id, due_date:prev}); });
   });
+  if (P.rico){
+    const R = P.rico, U = i => uid(i), todos = P.miembros.map((_,i) => i), hace = (d, h = 0) => new Date(Date.now() - d*864e5 - h*36e5);
+    db.manual = []; db.notices = []; db.rules = []; db.rulesLog = []; db.gastos = []; db.pagos = []; db.payments = [];
+    // gastos sueltos, con distintos repartos
+    R.gastos.forEach(([name, amount, dias, payer, parts, split, vals], k) => {
+      const ps = (parts || todos).map(U); let shares;
+      if (split === 'exact') shares = ps.map((u,i) => ({user_id:u, amount:vals[i]}));
+      else if (split === 'pct'){ shares = ps.map((u,i) => ({user_id:u, amount:Math.round(amount*vals[i])/100}));
+        shares[0].amount = Math.round((shares[0].amount + amount - shares.reduce((t,x) => t + x.amount, 0))*100)/100; }
+      else shares = repartir(amount, ps);
+      const when = hace(dias, (k % 4) + 1);
+      db.manual.push({id:id('g'), name, amount, date:iso(when), paid_by:U(payer), created_by:U(payer), created_at:when.toISOString(), shares});
+    });
+    // horas creíbles: se apunta durante el día y se compra unas horas después
+    db.items.forEach((it, i) => {
+      const c = new Date(Date.now() - (P.compra[i][2] || 0)*864e5); c.setHours(9 + (i*5) % 9, (i*13) % 60, 0, 0);
+      if (c.getTime() > Date.now() - 36e5) c.setTime(Date.now() - ((i % 5) + 1)*36e5);
+      it.created_at = c.toISOString();
+      if (it.is_bought) it.bought_at = new Date(Math.min(c.getTime() + (1 + i % 3)*36e5, Date.now() - ((i % 6) + 1)*6e5)).toISOString();
+    });
+    // lo que se compró con precio también es un gasto
+    db.items.filter(it => it.precio).forEach(it => {
+      const g = {id:id('g'), name:'Compra: ' + it.name, amount:it.precio, date:iso(new Date(it.bought_at)), paid_by:it.bought_by, created_by:it.bought_by,
+        created_at:it.bought_at, shares:repartir(it.precio, [it.bought_by, ...db.members.map(m => m.id).filter(u => u !== it.bought_by)])};
+      db.manual.push(g); it.expense_id = g.id;
+    });
+    // gastos de las facturas de los últimos meses, casi todos ya pagados
+    const hoy = iso(new Date());
+    db.bills.filter(b => !b.is_paused).forEach(b => {
+      let d = b.next_due_date;
+      for (let k = 1; k <= 3; k++){
+        d = shiftDue(d, b.frequency, -1);
+        if (d >= hoy) continue;
+        if (new Date(d) < hace(80)) break;
+        crearGasto(b, d);
+        db.members.filter(m => m.id !== b.paid_by).forEach((m, x) => { if (k >= 2 || x < 2) db.pagos.push({bill_id:b.id, user_id:m.id, due_date:d}); });
+      }
+    });
+    // deudas ya saldadas
+    R.pagos.forEach(([de, a, amount, dias, quien]) => db.payments.push({id:id('p'), from_user:U(de), to_user:U(a), amount, note:'Saldar deuda', paid_at:hace(dias, 2).toISOString(), created_by:U(quien)}));
+    // tablón: avisos
+    R.avisos.forEach(([title, content, dias, vence, autor]) => db.notices.push({id:id('a'), title, content, user_id:U(autor),
+      created_at:hace(dias, 1).toISOString(), expires_at: vence === null ? null : new Date(Date.now() + vence*864e5).toISOString()}));
+    // tablón: normas, con sus cambios y una eliminada
+    R.normas.forEach(([title, description, dias, autor]) => {
+      const when = hace(dias).toISOString(), r = {id:id('r'), title, description, created_by:U(autor), created_at:when, updated_by:U(autor), updated_at:when};
+      db.rules.push(r); logRegla('created', r, U(autor), when, null, {title, description});
+    });
+    R.cambios.forEach(([n, dias, quien, texto]) => {
+      const r = db.rules[n], antes = {title:r.title, description:r.description}, when = hace(dias).toISOString();
+      r.description = texto; r.updated_by = U(quien); r.updated_at = when;
+      logRegla('updated', r, U(quien), when, antes, {title:r.title, description:r.description});
+    });
+    R.borradas.forEach(([title, description, dc, autor, db_, quien]) => {
+      const r = {id:id('r'), title, description};
+      logRegla('created', r, U(autor), hace(dc).toISOString(), null, {title, description});
+      logRegla('deleted', r, U(quien), hace(db_).toISOString(), {title, description}, null);
+    });
+    db.rulesLog.sort((a,b) => b.acted_at.localeCompare(a.acted_at));
+    // limpieza: lo que ya se ha hecho esta semana
+    const lunes = mondayOf().getTime() + 36e5;
+    db.done = {};
+    R.hechas.forEach(([zi, horas]) => { if (db.zones[zi]) db.done['z' + zi + w] = new Date(Math.max(lunes, Date.now() - horas*36e5)).toISOString(); });
+  }
   return {
     kind:'demo', uid:me, piso:pisoDemo,
     myName:()=>wait(db.myName), setName:n=>{ db.myName=n; db.members[0].name=n; return wait(); },
