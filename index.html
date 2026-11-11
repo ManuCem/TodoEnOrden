@@ -1351,8 +1351,13 @@ async function renderAvisos(){
   // por si alguno vence con la pantalla abierta
   const ahora = Date.now();
   list = list.filter(n => !n.expires_at || new Date(n.expires_at) > ahora);
-  const proximo = Math.min(...list.filter(n => n.expires_at).map(n => new Date(n.expires_at) - ahora), 2**31 - 1);
-  if (isFinite(proximo)) S.avisoTimer = setTimeout(() => { if (S.tab === 'avisos' && S.apt === apt && !S.avisoForm) renderAvisos(); }, proximo + 1000);
+  // Solo si algún aviso tiene fecha de finalización, y como mucho dentro de 24 h
+  // (setTimeout no admite esperas de más de ~24 días: se dispararía al instante y en bucle).
+  const conFecha = list.filter(n => n.expires_at).map(n => new Date(n.expires_at) - ahora).filter(ms => ms > 0);
+  if (conFecha.length){
+    const espera = Math.min(Math.min(...conFecha) + 1000, 864e5);
+    S.avisoTimer = setTimeout(() => { if (S.tab === 'avisos' && S.apt === apt && !S.avisoForm && !S.avisoDel) renderAvisos(); }, espera);
+  }
   const yo = S.api.uid;
   const form = S.avisoForm ? `
     <form id="fAviso" novalidate style="display:grid;gap:12px;margin-top:12px">
