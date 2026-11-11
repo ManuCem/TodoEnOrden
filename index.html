@@ -513,7 +513,7 @@ function remoteApi(sb, uid){
       if (r.error && hayFoto){ hayFoto = false; r = await q('full_name'); }
       return ok(r).map(x => ({id:x.user_id, name:x.profiles?.full_name || 'Sin nombre', avatar:x.profiles?.avatar_url || ''}));
     },
-    // Echar a alguien del piso (solo el admin; lo comprueba Supabase)
+    // Echar a alguien del piso (cualquier miembro, menos a sí mismo y al admin; lo comprueba Supabase)
     async removeMember(aptId, userId){ ok(await sb.rpc('remove_member', {p_apartment_id:aptId, p_user_id:userId})); },
     async balances(aptId){
       const rows = ok(await sb.from('apartment_balances').select('user_id,balance').eq('apartment_id', aptId));
@@ -1550,7 +1550,7 @@ async function renderPiso(){
     <section class="sec">
       <div class="sec-head"><h2>Compañeros</h2><span class="count">${S.members.length}</span></div>
       <ul class="list">${S.members.map(m => {
-        const puedeEchar = esAdmin(apt) && m.id !== S.api.uid && m.id !== apt.owner_id;
+        const puedeEchar = m.id !== S.api.uid && m.id !== apt.owner_id;
         const saldo = S.echar === m.id && S.echarSaldo ? S.echarSaldo[m.id] || 0 : 0;
         return `
         <li style="flex-wrap:wrap"><span class="mag-dot mag ${mc(m.id)}">${dotInner(m)}</span>
@@ -1564,7 +1564,7 @@ async function renderPiso(){
               Si conserva el código del piso, podría volver a unirse.</span>
             <span class="row"><button class="btn small danger" data-echar-ok="${esc(m.id)}">Sí, echar</button><button class="btn small ghost" data-echar-no>Cancelar</button></span></div>` : ''}
         </li>`; }).join('')}</ul>
-      ${esAdmin(apt) && S.members.length > 1 ? `<p class="small dim" style="margin:8px 2px 0">${apt.owner_id ? 'Como admin, puedes echar a alguien del piso.' : 'Este piso no tiene admin: cualquiera puede echar a alguien.'}</p>` : ''}
+      ${S.members.length > 1 ? `<p class="small dim" style="margin:8px 2px 0">Cualquiera del piso puede echar a otro compañero${apt.owner_id ? ', menos al admin' : ''}.</p>` : ''}
     </section>
     ${ajustesPisoHtml(apt)}`;
   bindAjustesPiso(apt);
