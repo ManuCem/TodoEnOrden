@@ -609,8 +609,10 @@ function remoteApi(sb, uid){
       const rows = ok(await sb.from('cleaning_assignments').update({is_done:v}).eq('id', id).select('id'));
       if (!rows.length) throw new Error('Solo puedes marcar tus propias tareas.');
     },
-    async bills(aptId){ return ok(await sb.from('recurring_bills').select('id,name,amount,frequency,next_due_date,paid_by,is_paused').eq('apartment_id', aptId).order('next_due_date').order('name')); },
+    async bills(aptId){ return ok(await sb.from('recurring_bills').select('id,name,amount,frequency,next_due_date,paid_by,is_paused,created_by').eq('apartment_id', aptId).order('next_due_date').order('name')); },
     async addBill(aptId,b){ ok(await sb.from('recurring_bills').insert({apartment_id:aptId,...b})); },
+    // Eliminar una factura: se borran también sus gastos, así nadie sigue debiendo por ella
+    async delBill(billId){ return ok(await sb.rpc('delete_bill', {p_bill_id:billId})) || 0; },
     async billPayments(aptId){ return ok(await sb.from('bill_payments').select('bill_id,user_id,due_date').eq('apartment_id', aptId)); },
     async payShare(aptId,billId,due){ ok(await sb.from('bill_payments').insert({apartment_id:aptId,bill_id:billId,user_id:uid,due_date:due})); },
     async unpayShare(billId,due){ ok(await sb.from('bill_payments').delete().eq('bill_id',billId).eq('due_date',due).eq('user_id',uid)); },
@@ -663,9 +665,9 @@ function remoteApi(sb, uid){
     },
     async generateDue(aptId){ return ok(await sb.rpc('generate_due_bills',{p_apartment_id:aptId})) || 0; },
     async billExpenses(aptId){
-      const rows = ok(await sb.from('expenses').select('id,description,amount,expense_date,paid_by,recurring_bill_id,created_at,expense_shares(user_id,amount)')
+      const rows = ok(await sb.from('expenses').select('id,description,amount,expense_date,paid_by,created_by,recurring_bill_id,created_at,expense_shares(user_id,amount)')
         .eq('apartment_id', aptId).not('recurring_bill_id','is',null).is('deleted_at', null).order('expense_date',{ascending:false}).order('created_at',{ascending:false}).limit(20));
-      return rows.map(e => ({id:e.id, name:e.description, amount:Number(e.amount), date:e.expense_date, paid_by:e.paid_by, bill_id:e.recurring_bill_id,
+      return rows.map(e => ({id:e.id, name:e.description, amount:Number(e.amount), date:e.expense_date, paid_by:e.paid_by, created_by:e.created_by, bill_id:e.recurring_bill_id,
         shares:(e.expense_shares || []).map(x => ({user_id:x.user_id, amount:Number(x.amount)})).sort((a,b) => (b.user_id===e.paid_by) - (a.user_id===e.paid_by))}));
     },
     async advanceBill(billId){ ok(await sb.rpc('advance_bill',{p_bill_id:billId})); }
@@ -754,8 +756,8 @@ function demoApi(clave){
     done: {},
     bills: P.facturas.map(([name,amount,frequency,dias,quien,pausada],i) => ({
       id:'b'+i, name, amount, frequency, next_due_date: iso(new Date(Date.now()+dias*864e5)),
-      paid_by: uid(quien), is_paused: !!pausada })),
-    pagos: [], gastos: [], rules: [], rulesLog: [], notices: [], manual: [], payments: [], n: 100
+      paid_by: uid(quien), created_by: uid(quien), is_paused: !!pausada })),
+    pagos: [], gastos: [], borrados: [], rules: [], rulesLog: [], notices: [], manual: [], payments: [], n: 100
   };
   // una tarea de la semana ya hecha, para que la demo no salga vacía
   const w = iso(mondayOf());
@@ -763,12 +765,16 @@ function demoApi(clave){
   if (db.bills.length && db.members.length > 1)
     db.pagos.push({ bill_id: db.bills[0].id, user_id: uid(1), due_date: db.bills[0].next_due_date });
   const id = p => p + (db.n++);
+  // Compra con precio: al quitarla o destacharla se borra su gasto (solo quien lo pagó)
+  const quitarGastoCompra = x => { const g = x.expense_id && db.manual.find(y => y.id === x.expense_id); if (!g) return null;
+    if (g.created_by !== me) return `Este producto tiene su gasto anotado (${eur(g.amount)}): solo quien lo pagó puede quitarlo`;
+    db.manual = db.manual.filter(y => y !== g); return null; };
   const wait = v => new Promise(r => setTimeout(()=>r(v), 110));
   // gasto de una factura, repartido a partes iguales; los céntimos sobrantes, para quien la adelanta
   const crearGasto = (b, date) => {
     const parts = [db.members.find(m => m.id === b.paid_by), ...db.members.filter(m => m.id !== b.paid_by)];
     const cents = Math.round(Number(b.amount)*100), base = Math.floor(cents/parts.length), rem = cents % parts.length;
-    db.gastos.push({id:id('e'), name:b.name, amount:Number(b.amount), date, paid_by:b.paid_by, bill_id:b.id,
+    db.gastos.push({id:id('e'), name:b.name, amount:Number(b.amount), date, paid_by:b.paid_by, created_by:b.created_by || b.paid_by, bill_id:b.id,
       shares: parts.map((m,i) => ({user_id:m.id, amount:(base + (i < rem ? 1 : 0))/100}))});
   };
   // gastos sueltos de ejemplo
@@ -896,9 +902,10 @@ function demoApi(clave){
       const g = i.expense_id ? db.manual.find(x => x.id === i.expense_id) : null; return {...i, expense: g ? {amount:g.amount, deleted_at:null} : null}; })),
     addItem:(a,name)=>{ if (db.items.some(i=>i.name.toLowerCase()===name.toLowerCase())) return Promise.reject({code:'23505',message:'dup'}); db.items.push({id:id('i'),name,is_bought:false,created_at:new Date().toISOString()}); return wait(); },
     setBought:(i,v)=>{ const x = db.items.find(y=>y.id===i); if (!x) return Promise.reject(new Error('Ese producto ya no está en la lista.'));
+      if (!v && x.is_bought){ const err = quitarGastoCompra(x); if (err) return Promise.reject(new Error(err)); x.expense_id = null; }
       if (v && !x.is_bought){ x.bought_by = me; x.bought_at = new Date().toISOString(); } if (!v){ x.bought_by = null; x.bought_at = null; }
       x.is_bought = v; return wait(); },
-    delItem:i=>{ db.items=db.items.filter(x=>x.id!==i); return wait(); },
+    delItem:i=>{ const x = db.items.find(y=>y.id===i); const err = x && quitarGastoCompra(x); if (err) return Promise.reject(new Error(err)); db.items=db.items.filter(y=>y.id!==i); return wait(); },
     renameItem:(i,name)=>{ if (db.items.some(x=>x.id!==i && x.name.toLowerCase()===name.toLowerCase())) return Promise.reject({code:'23505',message:'dup'}); db.items.find(x=>x.id===i).name=name; return wait(); },
     zones:()=>wait(db.zones.slice()),
     addZone:(a,name)=>{ if (db.zones.some(z=>z.name.toLowerCase()===name.toLowerCase())) return Promise.reject({code:'23505',message:'dup'}); db.zones.push({id:id('z'),name}); return wait(); },
@@ -925,7 +932,7 @@ function demoApi(clave){
     },
     setDone:(i,v)=>{ db.done[i]= v ? new Date().toISOString() : null; return wait(); },
     bills:()=>wait(db.bills.slice().sort((a,b)=>a.next_due_date.localeCompare(b.next_due_date)||a.name.localeCompare(b.name,'es'))),
-    addBill:(a,b)=>{ db.bills.push({id:id('b'),is_paused:false,...b}); return wait(); },
+    addBill:(a,b)=>{ db.bills.push({id:id('b'),is_paused:false,created_by:me,...b}); return wait(); },
     billPayments:()=>wait(db.pagos.slice()),
     payShare:(a,billId,due)=>{ db.pagos.push({bill_id:billId,user_id:me,due_date:due}); return wait(); },
     unpayShare:(billId,due)=>{ db.pagos = db.pagos.filter(p=>!(p.bill_id===billId && p.due_date===due && p.user_id===me)); return wait(); },
@@ -957,10 +964,16 @@ function demoApi(clave){
       db.manual.push(g);
       if (!it.is_bought){ it.is_bought = true; it.bought_by = me; it.bought_at = new Date().toISOString(); }
       it.expense_id = g.id; return wait(g.id); },
-    delExpense:(gid)=>{ const k = db.manual.findIndex(g => g.id === gid);
+    delExpense:(gid)=>{ const lista = db.manual.some(g => g.id === gid) ? db.manual : db.gastos, k = lista.findIndex(g => g.id === gid);
       if (k < 0) return Promise.reject(new Error('Ese gasto no existe o no es de tu piso'));
-      if (db.manual[k].created_by !== me) return Promise.reject(new Error('Solo quien anotó el gasto puede eliminarlo'));
-      db.manual.splice(k,1); return wait(); },
+      if (lista[k].created_by !== me && lista[k].paid_by !== me) return Promise.reject(new Error('Solo quien anotó el gasto o quien lo pagó puede eliminarlo'));
+      if (lista === db.gastos) db.borrados.push(lista[k].bill_id + '|' + lista[k].date);
+      lista.splice(k,1); return wait(); },
+    delBill:(billId)=>{ const b = db.bills.find(x => x.id === billId); if (!b) return Promise.reject(new Error('Esa factura no existe o no es de tu piso'));
+      const vivos = u => db.members.some(m => m.id === u);
+      if (b.created_by !== me && b.paid_by !== me && (vivos(b.created_by) || vivos(b.paid_by))) return Promise.reject(new Error('Solo quien creó la factura o quien la adelanta puede eliminarla'));
+      const n = db.gastos.filter(g => g.bill_id === billId).length;
+      db.gastos = db.gastos.filter(g => g.bill_id !== billId); db.pagos = db.pagos.filter(p => p.bill_id !== billId); db.bills = db.bills.filter(x => x.id !== billId); return wait(n); },
     notices:()=>{ const ahora = Date.now();
       return wait(db.notices.filter(n => !n.expires_at || new Date(n.expires_at) > ahora).sort((a,b) => b.created_at.localeCompare(a.created_at))
         .map(n => ({...n, author_name: db.members.find(m => m.id === n.user_id)?.name || null}))); },
@@ -984,7 +997,7 @@ function demoApi(clave){
       const hoy = iso(new Date()); let n = 0;
       db.bills.filter(b => !b.is_paused && db.members.some(m => m.id === b.paid_by)).forEach(b => {
         for (let k = 0; b.next_due_date <= hoy && k < 24; k++){
-          if (!db.gastos.some(g => g.bill_id === b.id && g.date === b.next_due_date)){ crearGasto(b, b.next_due_date); n++; }
+          if (!db.gastos.some(g => g.bill_id === b.id && g.date === b.next_due_date) && !db.borrados.includes(b.id + '|' + b.next_due_date)){ crearGasto(b, b.next_due_date); n++; }
           b.next_due_date = shiftDue(b.next_due_date, b.frequency);
         }
       });
@@ -1222,7 +1235,7 @@ function recargarAlVolver(){
   if (document.visibilityState !== 'visible' || !S.apt || !S.api || S.tab === 'perfil') return;
   if (Date.now() - ultimaCarga < 15000) return;
   const ocupado = S.gastoForm || S.billForm || S.editBill || S.editItem || S.normaForm || S.avisoForm || S.echar || S.saldar ||
-    S.movDel || S.normaDel || S.avisoDel || S.precioItem || (document.activeElement && document.activeElement.matches && document.activeElement.matches('input,textarea,select'));
+    S.movDel || S.billDel || S.normaDel || S.avisoDel || S.precioItem || (document.activeElement && document.activeElement.matches && document.activeElement.matches('input,textarea,select'));
   if (ocupado) return;
   ultimaCarga = Date.now();
   render();
@@ -1910,20 +1923,25 @@ async function renderCompra(){
       </div>
       <div data-g="hechos">
       <div class="sec-head"><h2>Ya comprado</h2><span class="count">${comprados.length}</span></div>
-      ${comprados.length ? `<ul class="list">${comprados.map(filaCompra).join('')}</ul>` + '<p class="small dim" style="margin:6px 2px 0">Si tachaste algo por error, vuelve a pulsarlo y regresa a «Por comprar». Si lo compraste tú, puedes anotar lo que costó.</p>'
+      ${comprados.length ? `<ul class="list">${comprados.map(filaCompra).join('')}</ul>` + '<p class="small dim" style="margin:6px 2px 0">Si tachaste algo por error, vuelve a pulsarlo y regresa a «Por comprar». Si lo compraste tú, puedes anotar lo que costó; si lo destachas o lo quitas, ese gasto se elimina.</p>'
         : '<p class="empty">Todavía no se ha tachado nada.</p>'}
       </div>
     </section>`;
   aplicarSub('compra');
 
   $('#fItem').onsubmit = e => run(e, async () => { await S.api.addItem(S.apt.id, $('#itemName').value.trim()); await renderCompra(); });
+  // si tenía su gasto anotado, al destacharlo o quitarlo se elimina ese gasto (nadie sigue debiendo por él)
+  const conGasto = idi => { const it = items.find(x => x.id === idi); return it && it.expense && !it.expense.deleted_at ? it : null; };
   app.querySelectorAll('[data-b]').forEach(b => b.onclick = async () => {
     if (b.disabled) return; b.disabled = true;
-    try{ await S.api.setBought(b.dataset.b, b.getAttribute('aria-pressed') !== 'true'); }catch(err){ toast(friendly(err)); }
+    const it = b.getAttribute('aria-pressed') === 'true' ? conGasto(b.dataset.b) : null;
+    try{ await S.api.setBought(b.dataset.b, b.getAttribute('aria-pressed') !== 'true');
+      if (it) toast(`También se ha eliminado su gasto de ${eur(it.expense.amount)}: ya no se debe.`); }catch(err){ toast(friendly(err)); }
     await renderCompra();
   });
   app.querySelectorAll('[data-d]').forEach(b => b.onclick = async () => {
-    try{ await S.api.delItem(b.dataset.d); await renderCompra(); }catch(err){ toast(friendly(err)); }
+    const it = conGasto(b.dataset.d);
+    try{ await S.api.delItem(b.dataset.d); if (it) toast(`Quitado. También se ha eliminado su gasto de ${eur(it.expense.amount)}.`); await renderCompra(); }catch(err){ toast(friendly(err)); }
   });
   app.querySelectorAll('[data-precio-abrir]').forEach(b => b.onclick = async () => { S.precioItem = b.dataset.precioAbrir; await renderCompra(); $('#precioIn')?.focus(); });
   app.querySelectorAll('[data-precio-no]').forEach(b => b.onclick = async () => { S.precioItem = null; await renderCompra(); });
@@ -2196,7 +2214,7 @@ function movimientosHtml(mov){
   const irSaldos = g => g.shares.some(x => x.user_id !== g.paid_by) && (g.paid_by === yo || g.shares.some(x => x.user_id === yo))
     ? `<p class="small dim" style="margin:6px 0 0;line-height:1.5">Se paga todo junto en <button type="button" class="link" style="display:inline;padding:0;min-height:0" data-go="facturas" data-subgo="saldos">Saldos</button>, sin ir gasto por gasto.</p>` : '';
   const borrar = (m, tipoTxt) => S.movDel === m.key ? `<div class="confirm" role="alertdialog" aria-label="Confirmar">
-        <span>¿${tipoTxt}? Dejará de contar en los saldos.</span>
+        <span>¿${tipoTxt}? ${m.tipo === 'pago' ? 'Dejará de contar en los saldos.' : 'Nadie seguirá debiendo nada por él.'}</span>
         <span class="row"><button class="btn small danger" data-mdel-ok="${esc(m.key)}">Sí</button><button class="btn small ghost" data-mdel-no>Cancelar</button></span></div>`
       : `<span class="acts"><button type="button" class="link" data-mdel="${esc(m.key)}">${m.tipo === 'pago' ? 'Deshacer' : 'Eliminar'}</button></span>`;
   const item = m => {
@@ -2214,14 +2232,15 @@ function movimientosHtml(mov){
           <span class="right"><span class="amount">${eur(g.amount)}</span><span class="small dim">${resumen}</span></span></span>
         ${chipsReparto(g, pagado)}
         ${mia && g.paid_by !== yo ? `<span class="meta-line"><button class="btn small ${yoPago ? 'ghost' : ''}" data-pay="${esc(g.bill_id)}" data-due="${esc(g.date)}" data-on="${yoPago}">${yoPago ? 'Ya he pagado mi parte ✓' : `Pagar mi parte (${eur(mia.amount)})`}</button></span>` : ''}
-        ${faltan === 0 ? '<span class="meta-line"><span class="state ok">Saldado entre todos</span></span>' : ''}</li>`;
+        ${faltan === 0 ? '<span class="meta-line"><span class="state ok">Saldado entre todos</span></span>' : ''}
+        ${g.created_by === yo || g.paid_by === yo ? borrar(m, `Eliminar el gasto de «${esc(g.name)}» del ${esc(fmtDate(g.date))} (${eur(g.amount)})`) : ''}</li>`;
     }
     return `<li class="mov suelto"><span class="mov-top"><span><span class="tag-mov">Gasto</span><span class="name">${esc(g.name)}</span><br>
         <span class="small dim">${esc(fmtDate(g.date))} · ${g.paid_by === yo ? 'pagaste tú' : 'pagó ' + esc(nombreDe(g.paid_by))}</span></span>
         <span class="right"><span class="amount">${eur(g.amount)}</span><span class="small dim">${resumen}</span></span></span>
       ${chipsReparto(g, u => u === g.paid_by)}
       ${irSaldos(g)}
-      ${g.created_by === yo ? borrar(m, `Eliminar «${esc(g.name)}» (${eur(g.amount)})`) : ''}</li>`;
+      ${g.created_by === yo || g.paid_by === yo ? borrar(m, `Eliminar «${esc(g.name)}» (${eur(g.amount)})`) : ''}</li>`;
   };
   const cuenta = t => mov.filter(m => t === 'todos' || m.tipo === t).length;
   return `<section class="sec" id="movs">
@@ -2247,8 +2266,14 @@ function facturasHtml(bills, pagos){
     const parte = Number(b.amount) / n;
     const hechos = pagos.filter(p => p.bill_id === b.id && p.due_date === b.next_due_date);
     const yoPago = hechos.some(p => p.user_id === yo), todos = hechos.length >= n;
-    const acts = `<span class="acts"><button type="button" class="link" data-edit="${esc(b.id)}" aria-label="Editar ${esc(b.name)}">Editar</button>
-        <button type="button" class="link" data-pause="${esc(b.id)}" data-to="${!b.is_paused}" aria-label="${b.is_paused ? 'Reanudar' : 'Pausar'} ${esc(b.name)}">${b.is_paused ? 'Reanudar' : 'Pausar'}</button></span>`;
+    const vivo = u => S.members.some(m => m.id === u);
+    const puedoBorrar = b.created_by === yo || b.paid_by === yo || (!vivo(b.created_by) && !vivo(b.paid_by));
+    const acts = S.billDel === b.id ? `<div class="confirm" role="alertdialog" aria-label="Confirmar">
+        <span>¿Eliminar «${esc(b.name)}»? Se borran también los gastos que ya ha creado y nadie seguirá debiendo nada por ella. No se puede deshacer.</span>
+        <span class="row"><button class="btn small danger" data-bdel-ok="${esc(b.id)}">Sí, eliminar</button><button class="btn small ghost" data-bdel-no>Cancelar</button></span></div>`
+      : `<span class="acts"><button type="button" class="link" data-edit="${esc(b.id)}" aria-label="Editar ${esc(b.name)}">Editar</button>
+        <button type="button" class="link" data-pause="${esc(b.id)}" data-to="${!b.is_paused}" aria-label="${b.is_paused ? 'Reanudar' : 'Pausar'} ${esc(b.name)}">${b.is_paused ? 'Reanudar' : 'Pausar'}</button>${puedoBorrar ? `
+        <button type="button" class="link" data-bdel="${esc(b.id)}" aria-label="Eliminar ${esc(b.name)}">Eliminar</button>` : ''}</span>`;
     if (b.is_paused) return `<li class="paused"><span class="grow"><span class="name">${esc(b.name)}</span><br>
         <span class="small dim">${esc(fmtDate(b.next_due_date))} · se repite ${esc(REPITE[b.frequency] || 'cada mes')} · la adelanta ${esc(who(b.paid_by))}</span>
         <span class="meta-line"><span class="state">No genera gastos mientras esté en pausa</span></span>${acts}</span>
@@ -2404,6 +2429,15 @@ function bindFacturas(bills){
   app.querySelectorAll('[data-edit]').forEach(b => b.onclick = async () => {
     S.editBill = b.dataset.edit; await renderFacturas();
     $('#fBill')?.scrollIntoView({behavior:'smooth', block:'center'}); $('#bAmount')?.focus({preventScroll:true});
+  });
+  app.querySelectorAll('[data-bdel]').forEach(b => b.onclick = () => { S.billDel = b.dataset.bdel; renderFacturas(); });
+  app.querySelectorAll('[data-bdel-no]').forEach(b => b.onclick = () => { S.billDel = null; renderFacturas(); });
+  app.querySelectorAll('[data-bdel-ok]').forEach(b => b.onclick = async () => {
+    b.disabled = true; const bill = bills.find(x => x.id === b.dataset.bdelOk);
+    try{ const n = await S.api.delBill(b.dataset.bdelOk); if (S.editBill === b.dataset.bdelOk) S.editBill = null;
+      toast(`Factura «${bill ? bill.name : ''}» eliminada${n ? ` junto con ${n === 1 ? 'su gasto' : 'sus ' + n + ' gastos'}` : ''}.`); }
+    catch(err){ toast(friendly(err)); }
+    S.billDel = null; renderFacturas();
   });
   app.querySelectorAll('[data-pause]').forEach(b => b.onclick = async () => {
     const bill = bills.find(x => x.id === b.dataset.pause); if (!bill) return;
