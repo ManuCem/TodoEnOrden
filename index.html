@@ -106,6 +106,8 @@ button{cursor:pointer}
 .status{display:inline-flex;align-items:center;gap:7px;color:var(--muted);font-weight:600;background:var(--paper);
   border:1px solid var(--line);border-radius:99px;padding:5px 12px;box-shadow:var(--shadow)}
 .status i{width:8px;height:8px;border-radius:50%;background:var(--ok)}
+/* Pantallas estrechas con «Entrar»: el estado se queda en el punto (el texto sigue para lectores de pantalla) */
+@media (max-width:380px){ #estado:not(.demo){gap:0;padding-left:12px;padding-right:12px} #estado:not(.demo) .st-txt{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)} }
 .status.demo i{background:var(--m2)}
 .top h1{padding-left:14px;border-left:6px solid var(--accent)}
 
@@ -277,6 +279,9 @@ input.invalid,select.invalid{border-color:var(--bad)}
 .buscador svg{position:absolute;left:13px;top:50%;transform:translateY(-50%);color:var(--muted);pointer-events:none}
 .buscador small{display:block;margin:6px 2px 0;color:var(--muted);font-size:13px}
 .oculto,.empty.oculto,.list li.oculto{display:none!important}
+.aviso-cuenta{margin:14px 0 0;padding:12px 14px;border-radius:16px;background:var(--paper);border:2px dashed var(--accent);display:grid;gap:10px;font-size:14.5px;line-height:1.45}
+.aviso-cuenta .row{display:flex;gap:8px;flex-wrap:wrap}
+.aviso-cuenta svg{vertical-align:-3px;margin-right:4px}
 
 /* tramos de la semana */
 .seg{display:flex;gap:4px;margin:12px 0 6px}
@@ -532,6 +537,7 @@ function remoteApi(sb, uid){
     kind:'supabase', uid,
     async myName(){ const r = ok(await sb.from('profiles').select('full_name').eq('id', uid).maybeSingle()); return r?.full_name || ''; },
     async setName(name){ ok(await sb.from('profiles').update({full_name:name}).eq('id', uid)); },
+    async claimMerge(ticket){ return ok(await sb.rpc('claim_merge_ticket', {p_ticket:ticket})) || 0; },
     async myAvatar(){
       if (!hayFoto) return '';
       const r = await sb.from('profiles').select('avatar_url').eq('id', uid).maybeSingle();
@@ -635,11 +641,12 @@ function remoteApi(sb, uid){
     },
     // TEO-28: gastos anotados a mano (los de facturas van aparte). Se reparten a partes iguales.
     async expenses(aptId){
-      const rows = ok(await sb.from('expenses').select('id,description,amount,expense_date,paid_by,created_by,created_at,expense_shares(user_id,amount)')
+      const rows = ok(await sb.from('expenses').select('id,description,amount,expense_date,paid_by,created_by,created_at,split_type,expense_shares(user_id,amount,percentage)')
         .eq('apartment_id', aptId).is('recurring_bill_id', null).is('deleted_at', null)
         .order('expense_date',{ascending:false}).order('created_at',{ascending:false}).limit(50));
-      return rows.map(e => ({id:e.id, name:e.description, amount:Number(e.amount), date:e.expense_date, paid_by:e.paid_by, created_by:e.created_by,
-        shares:(e.expense_shares || []).map(x => ({user_id:x.user_id, amount:Number(x.amount)}))}));
+      return rows.map(e => ({id:e.id, name:e.description, amount:Number(e.amount), date:e.expense_date, paid_by:e.paid_by, created_by:e.created_by, created_at:e.created_at,
+        split:e.split_type === 'excluding' ? 'equal' : (e.split_type || 'equal'),
+        shares:(e.expense_shares || []).map(x => ({user_id:x.user_id, amount:Number(x.amount), percentage:x.percentage == null ? null : Number(x.percentage)}))}));
     },
     async addExpense(aptId, g){
       return ok(await sb.rpc('create_expense', {p_apartment_id:aptId, p_description:g.description, p_amount:g.amount, p_paid_by:g.paid_by,
@@ -655,6 +662,9 @@ function remoteApi(sb, uid){
     // De la compra al gasto: anota lo que costó un producto y lo reparte entre todos
     async buyItemWithExpense(itemId, amount){ return ok(await sb.rpc('buy_item_with_expense', {p_item_id:itemId, p_amount:amount})); },
     async delExpense(expenseId){ ok(await sb.rpc('delete_expense', {p_expense_id:expenseId})); },
+    // Editar un gasto: la base de datos recalcula el reparto con las mismas reglas que al crearlo
+    async updateExpense(expenseId, g){ ok(await sb.rpc('update_expense', {p_expense_id:expenseId, p_description:g.description, p_amount:g.amount, p_paid_by:g.paid_by,
+      p_split_type:g.split || 'equal', p_participants:g.participants, p_values:g.values || null, p_expense_date:g.date})); },
     // Tablón de avisos: los vencidos no llegan (los filtra la base de datos); solo el autor elimina
     async notices(aptId){ return ok(await sb.rpc('list_bulletin_notices', {p_apartment_id:aptId})) || []; },
     async addNotice(aptId, n){ ok(await sb.from('bulletin_notices').insert({apartment_id:aptId, title:n.title, content:n.content, expires_at:n.expires_at})); },
@@ -776,6 +786,16 @@ function demoApi(clave){
   if (db.bills.length && db.members.length > 1)
     db.pagos.push({ bill_id: db.bills[0].id, user_id: uid(1), due_date: db.bills[0].next_due_date });
   const id = p => p + (db.n++);
+  // reparto de un gasto (igual que la base de datos); devuelve las partes o un texto de error
+  const calcularGasto = g => {
+    if (!(g.amount > 0)) return 'El importe debe ser mayor que 0';
+    if (!g.participants || !g.participants.length) return 'Tiene que haber al menos un participante';
+    if (!db.members.some(m => m.id === g.paid_by)) return 'El pagador no pertenece al piso';
+    if (!g.split || g.split === 'equal') return repartir(g.amount, g.participants);
+    if (g.split === 'exact') return g.participants.map((u,i) => ({user_id:u, amount:g.values[i]}));
+    const sh = g.participants.map((u,i) => ({user_id:u, amount:Math.round(g.amount*g.values[i])/100, percentage:g.values[i]}));
+    const dif = Math.round((g.amount - sh.reduce((s,x) => s + x.amount, 0))*100)/100; sh[0].amount = Math.round((sh[0].amount + dif)*100)/100; return sh;
+  };
   // Compra con precio: al quitarla o destacharla se borra su gasto (solo quien lo pagó)
   const quitarGastoCompra = x => { const g = x.expense_id && db.manual.find(y => y.id === x.expense_id); if (!g) return null;
     if (g.created_by !== me) return `Este producto tiene su gasto anotado (${eur(g.amount)}): solo quien lo pagó puede quitarlo`;
@@ -949,16 +969,17 @@ function demoApi(clave){
     unpayShare:(billId,due)=>{ db.pagos = db.pagos.filter(p=>!(p.bill_id===billId && p.due_date===due && p.user_id===me)); return wait(); },
     updateBill:(billId, fields)=>{ const b = db.bills.find(x => x.id === billId); if (!b) return Promise.reject(new Error('No tienes permiso para modificar esta factura.')); Object.assign(b, fields); return wait(); },
     expenses:()=>wait(db.manual.slice().sort((a,b) => b.date.localeCompare(a.date) || b.created_at.localeCompare(a.created_at)).map(g => ({...g, shares:g.shares.map(x => ({...x}))}))),
+    updateExpense:(gid, g)=>{ const x = db.manual.find(y => y.id === gid);
+      if (!x) return Promise.reject(new Error('Ese gasto no existe o no es de tu piso'));
+      if (x.created_by !== me && x.paid_by !== me) return Promise.reject(new Error('Solo quien anotó el gasto o quien lo pagó puede editarlo'));
+      const tmp = calcularGasto(g); if (typeof tmp === 'string') return Promise.reject(new Error(tmp));
+      Object.assign(x, {name:g.description, amount:Math.round(g.amount*100)/100, date:g.date, paid_by:g.paid_by, split:g.split || 'equal', shares:tmp}); return wait(); },
     addExpense:(a, g)=>{
       if (!(g.amount > 0)) return Promise.reject(new Error('El importe debe ser mayor que 0'));
       if (!g.participants || !g.participants.length) return Promise.reject(new Error('Tiene que haber al menos un participante'));
       if (!db.members.some(m => m.id === g.paid_by)) return Promise.reject(new Error('El pagador no pertenece al piso'));
-      let shares;
-      if (!g.split || g.split === 'equal') shares = repartir(g.amount, g.participants);
-      else if (g.split === 'exact') shares = g.participants.map((u,i) => ({user_id:u, amount:g.values[i]}));
-      else { shares = g.participants.map((u,i) => ({user_id:u, amount:Math.round(g.amount*g.values[i])/100}));
-        const dif = Math.round((g.amount - shares.reduce((s,x) => s + x.amount, 0))*100)/100; shares[0].amount = Math.round((shares[0].amount + dif)*100)/100; }
-      db.manual.push({id:id('g'), name:g.description, amount:Math.round(g.amount*100)/100, date:g.date, paid_by:g.paid_by, created_by:me, created_at:new Date().toISOString(), shares});
+      const shares = calcularGasto(g); if (typeof shares === 'string') return Promise.reject(new Error(shares));
+      db.manual.push({id:id('g'), name:g.description, amount:Math.round(g.amount*100)/100, date:g.date, paid_by:g.paid_by, created_by:me, created_at:new Date().toISOString(), split:g.split || 'equal', shares});
       return wait(); },
     payments:()=>wait(db.payments.slice().sort((a,b) => b.paid_at.localeCompare(a.paid_at))),
     addPayment:(a, p)=>{ if (p.from !== me && p.to !== me) return Promise.reject(new Error('Solo puedes anotar pagos en los que participas'));
@@ -1057,6 +1078,12 @@ async function boot(forceDemo){
     const q = new URLSearchParams(location.hash.replace(/^#/, '') + '&' + location.search.slice(1));
     if (/identity_already_exists|already linked/i.test((q.get('error_code') || '') + ' ' + (q.get('error_description') || ''))){
       history.replaceState(null, '', location.pathname);
+      // Esa cuenta de Google ya existe (la usaste en otro móvil). Antes de saltar a ella, esta cuenta anónima
+      // pide un ticket para que, al volver, todo lo suyo pase a la de Google y no quede una persona repetida.
+      try{
+        const ses = (await limite(sb.auth.getSession(), 4000, 'tiempo'))?.data?.session;
+        if (ses?.user?.is_anonymous){ const { data:tk } = await sb.rpc('create_merge_ticket'); if (tk) safeStorage.setItem('teo_fusion', tk); }
+      }catch(e){ console.warn('No se pudo preparar la unión de cuentas:', e); }
       const { error } = await sb.auth.signInWithOAuth({ provider:'google', options:{ redirectTo: location.origin + location.pathname } });
       if (error) throw error;
       return;
@@ -1112,6 +1139,13 @@ async function start(){
   if (!S.myAvatar && S.avatar && S.api.setAvatar && !S.anon){ // primera vez: tu foto de Google, para que tus compañeros la vean
     try{ await S.api.setAvatar(S.avatar); S.myAvatar = S.avatar; }catch{}
   }
+  // Vuelta de Google con una cuenta anónima antigua pendiente de unir (ver boot)
+  const tk = S.api.kind === 'supabase' && !S.anon ? safeStorage.getItem('teo_fusion') : null;
+  if (tk){
+    safeStorage.removeItem('teo_fusion');
+    try{ const n = await S.api.claimMerge(tk); if (n > 0) toast('Hemos unido tu cuenta anterior con la de Google: tus gastos, compras y turnos siguen contigo.'); }
+    catch(e){ toast(friendly(e)); }
+  }
   await refreshApt();
   await autoExpenses();
   const cod = safeStorage.getItem('teo_codigo');
@@ -1144,7 +1178,7 @@ function header(title){
     Object.entries(PISOS).map(([k,p]) => `<button data-piso="${k}" aria-pressed="${S.api.piso===k}">${esc(p.nombre)}</button>`).join('')}</div>` : '';
   return `<header class="top"><div class="meta"><button class="logo-btn" data-go="piso" aria-label="Ir al menú principal">${LOGO_IMG}</button>
     <span style="display:flex;gap:8px;align-items:center">
-      <span class="status ${demo?'demo':''}"><i></i>${demo?'Datos de ejemplo':'Conectado'}</span>
+      <span class="status ${demo?'demo':''}" id="estado"><i></i><span class="st-txt">${demo?'Datos de ejemplo':S.directo?'En directo':'Conectado'}</span></span>
       ${S.api.kind === 'supabase' ? (S.anon
         ? `<button class="status" data-google aria-label="Iniciar sesión con Google" style="font-weight:800;white-space:nowrap;flex:none">${GOOGLE_G}Entrar</button>`
         : `<button class="avatar" data-account aria-label="Menú de cuenta" aria-haspopup="true" aria-expanded="false">${avatarInner()}</button>`) : ''}
@@ -1153,7 +1187,13 @@ function header(title){
       <div class="who"><b>${esc(nombreVisible())}</b>${S.email ? `<small>${esc(S.email)}</small>` : ''}</div>
       <button data-go="perfil">👤 Mi perfil</button>
       <button data-logout>↩ Cerrar sesión</button></div>` : ''}</div>
-    <h1>${esc(title)}</h1>${pisos}${bannerHtml()}</header>`;
+    <h1>${esc(title)}</h1>${pisos}${avisoCuentaHtml()}${bannerHtml()}</header>`;
+}
+// Cuenta anónima dentro de un piso: si cambia de móvil o borra el navegador, sería otra persona. Se le pide guardarla con Google.
+function avisoCuentaHtml(){
+  if (S.api.kind !== 'supabase' || !S.anon || !S.apt || S.avisoCuentaOff) return '';
+  return `<div class="aviso-cuenta" role="note"><span><b>Guarda tu cuenta con Google.</b> Ahora solo vive en este navegador: si cambias de móvil o lo borras, aparecerías como otra persona en el piso.</span>
+    <span class="row"><button class="btn small" data-google>${GOOGLE_G} Guardar con Google</button><button class="btn small ghost" data-cuenta-luego>Luego</button></span></div>`;
 }
 function dueWords(d){
   if (d < 0) return `venció hace ${-d} ${-d===1?'día':'días'}`;
@@ -1201,12 +1241,13 @@ app.addEventListener('click', async e => {
   const p = e.target.closest('[data-piso]');
   if (p){ if (p.dataset.piso === S.api.piso) return; S.api = demoApi(p.dataset.piso); S.editItem = null; await start(); window.scrollTo(0,0); return; }
   if (e.target.closest('[data-google]')){ googleLogin(); return; }
+  if (e.target.closest('[data-cuenta-luego]')){ S.avisoCuentaOff = true; render(); return; }
   const acc = e.target.closest('[data-account]');
   if (acc){ const m = $('#userMenu'); m.hidden = !m.hidden; acc.setAttribute('aria-expanded', String(!m.hidden)); return; }
   if (e.target.closest('[data-logout]')){ await S.sb.auth.signOut(); S.tab = 'facturas'; await boot(false); return; }
   const g = e.target.closest('[data-go]'); if (!g) return;
   if (g.dataset.subgo){ S.sub = S.sub || {}; S.sub[g.dataset.go] = g.dataset.subgo; }
-  S.tab = g.dataset.go; S.editItem = null; S.editBill = null; S.normaForm = null; S.normaDel = null; S.avisoForm = false; S.avisoDel = null; S.gastoForm = false; S.gastoDel = null; S.echar = null; S.saldar = null; S.movDel = null; S.billForm = false; S.precioItem = null; S.histTodo = false; render(); window.scrollTo(0,0);
+  S.tab = g.dataset.go; S.editItem = null; S.editBill = null; S.normaForm = null; S.normaDel = null; S.avisoForm = false; S.avisoDel = null; S.gastoForm = false; S.gastoEdit = null; S.gastoTipo = null; S.gastoDel = null; S.echar = null; S.saldar = null; S.movDel = null; S.billForm = false; S.precioItem = null; S.histTodo = false; render(); window.scrollTo(0,0);
 });
 /* Animaciones: onda al pulsar y entrada al cambiar de pestaña */
 document.addEventListener('pointerdown', e => {
@@ -1242,12 +1283,48 @@ new MutationObserver(() => {
 // Al volver a la app (desbloquear el móvil, cambiar de pestaña del navegador) se recargan los datos,
 // salvo que estés escribiendo algo o confirmando una acción.
 let ultimaCarga = Date.now();
+// No se recarga la pantalla si estás escribiendo, con un formulario abierto o confirmando algo
+function estaOcupado(){
+  return !!(S.gastoForm || S.billForm || S.editBill || S.editItem || S.normaForm || S.avisoForm || S.echar || S.saldar ||
+    S.movDel || S.gastoEdit || S.billDel || S.normaDel || S.avisoDel || S.precioItem ||
+    (document.activeElement && document.activeElement.matches && document.activeElement.matches('input,textarea,select')));
+}
+/* ---------- Cambios en directo (Supabase Realtime) ----------
+   La app escucha los cambios de tu piso. Si alguien anota un gasto o tacha algo, tu pantalla se actualiza sola
+   (medio segundo después, y nunca mientras estás escribiendo: entonces espera a que termines). */
+let canal = null, rtT = null, rtMiembros = false;
+const TABLAS_DIRECTO = ['shopping_items','expenses','payments','bill_payments','recurring_bills','cleaning_assignments','cleaning_zones','bulletin_notices','house_rules','apartment_members'];
+function conectarDirecto(){
+  if (!S.sb || !S.api || S.api.kind !== 'supabase') return;
+  const apt = S.apt ? S.apt.id : null;
+  if (canal && canal.aptId === apt) return;
+  if (canal){ S.sb.removeChannel(canal); canal = null; S.directo = false; }
+  if (!apt) return;
+  const ch = S.sb.channel('piso-' + apt);
+  TABLAS_DIRECTO.forEach(t => ch.on('postgres_changes', {event:'*', schema:'public', table:t, filter:'apartment_id=eq.' + apt}, cambioEnDirecto));
+  // Los borrados no se pueden filtrar por piso (solo traen el id): ante cualquiera, se refresca
+  ['shopping_items','payments','bulletin_notices','house_rules','recurring_bills','cleaning_zones','apartment_members'].forEach(t =>
+    ch.on('postgres_changes', {event:'DELETE', schema:'public', table:t}, cambioEnDirecto));
+  ch.subscribe(st => { S.directo = st === 'SUBSCRIBED'; const e = $('#estado .st-txt'); if (e && !$('#estado').classList.contains('demo')) e.textContent = S.directo ? 'En directo' : 'Conectado'; });
+  ch.aptId = apt; canal = ch;
+}
+function cambioEnDirecto(p){
+  if (p && p.table === 'apartment_members') rtMiembros = true;
+  clearTimeout(rtT); rtT = setTimeout(aplicarDirecto, 600);
+}
+async function aplicarDirecto(){
+  if (!S.apt || ['perfil','ayuda'].includes(S.tab)) return;
+  if (document.visibilityState !== 'visible' || estaOcupado()){ clearTimeout(rtT); rtT = setTimeout(aplicarDirecto, 2500); return; }
+  const y = scrollY;
+  if (rtMiembros){ rtMiembros = false; const antes = S.apt.id; await refreshApt().catch(() => {}); if (!S.apt || S.apt.id !== antes) conectarDirecto(); }
+  ultimaCarga = Date.now();
+  await render();
+  if (Math.abs(scrollY - y) > 2) scrollTo(0, y);   // que no salte la pantalla
+}
 function recargarAlVolver(){
   if (document.visibilityState !== 'visible' || !S.apt || !S.api || S.tab === 'perfil') return;
   if (Date.now() - ultimaCarga < 15000) return;
-  const ocupado = S.gastoForm || S.billForm || S.editBill || S.editItem || S.normaForm || S.avisoForm || S.echar || S.saldar ||
-    S.movDel || S.billDel || S.normaDel || S.avisoDel || S.precioItem || (document.activeElement && document.activeElement.matches && document.activeElement.matches('input,textarea,select'));
-  if (ocupado) return;
+  if (estaOcupado()) return;
   ultimaCarga = Date.now();
   render();
 }
@@ -1256,9 +1333,10 @@ window.addEventListener('pageshow', e => { if (e.persisted){ ultimaCarga = 0; re
 function renderNav(){
   $('#navIn').innerHTML = TABS.map(([k,l]) => `<button data-tab="${k}" ${S.tab===k?'aria-current="page"':''}>${k === 'facturas' ? `<span class="eur" aria-hidden="true">€</span>${l}` : l}</button>`).join('');
   document.body.dataset.tab = S.tab;
-  $('#navIn').querySelectorAll('button').forEach(b => b.onclick = () => { S.tab = b.dataset.tab; S.editItem = null; S.editBill = null; S.normaForm = null; S.normaDel = null; S.avisoForm = false; S.avisoDel = null; S.gastoForm = false; S.gastoDel = null; S.echar = null; S.saldar = null; S.movDel = null; S.billForm = false; S.precioItem = null; S.histTodo = false; render(); window.scrollTo(0,0); });
+  $('#navIn').querySelectorAll('button').forEach(b => b.onclick = () => { S.tab = b.dataset.tab; S.editItem = null; S.editBill = null; S.normaForm = null; S.normaDel = null; S.avisoForm = false; S.avisoDel = null; S.gastoForm = false; S.gastoEdit = null; S.gastoTipo = null; S.gastoDel = null; S.echar = null; S.saldar = null; S.movDel = null; S.billForm = false; S.precioItem = null; S.histTodo = false; render(); window.scrollTo(0,0); });
 }
 async function render(){
+  conectarDirecto();
   if (S.tab === 'perfil' && !(S.api.kind === 'supabase' && !S.anon)) S.tab = 'piso';
   if (S.tab === 'perfil'){
     $('#nav').hidden = !S.apt; if (S.apt) renderNav();
@@ -2199,28 +2277,35 @@ function saldosHtml(bal){
 
 const TIPO_REPARTO = {equal:'A partes iguales', exact:'Por importes', percentage:'Por porcentajes'};
 function formGastoHtml(){
-  const yo = S.api.uid, hoy = iso(new Date()), tipo = S.gastoTipo || 'equal';
+  // S.gastoEdit: el gasto que se está editando (mismo formulario, ya relleno)
+  const yo = S.api.uid, hoy = iso(new Date()), ed = S.gastoEdit;
+  const tipo = S.gastoTipo || (ed && TIPO_REPARTO[ed.split] ? ed.split : 'equal');
+  const parte = u => ed ? ed.shares.find(x => x.user_id === u) : null;
+  const valor = u => { const x = parte(u); if (!x || !ed || ed.split !== tipo) return '';
+    return tipo === 'percentage' ? (x.percentage ?? '') : tipo === 'exact' ? x.amount : ''; };
+  const pagador = ed ? ed.paid_by : yo;
   return `<form id="fGasto" novalidate style="display:grid;gap:12px;margin:6px 0 4px">
-      <h3 class="wk" style="margin:0">Nuevo gasto</h3>
-      <label>Concepto (opcional)<input id="gConcepto" maxlength="80" placeholder="Cena del viernes"></label>
+      <h3 class="wk" style="margin:0">${ed ? 'Editar gasto' : 'Nuevo gasto'}</h3>
+      ${ed ? '<p class="small dim" style="margin:-6px 0 0">Los saldos se recalculan al guardar.</p>' : ''}
+      <label>Concepto (opcional)<input id="gConcepto" maxlength="80" placeholder="Cena del viernes" value="${esc(ed ? ed.name : '')}"></label>
       <div class="row" style="display:grid;grid-template-columns:1fr 1fr;gap:10px;align-items:start">
-        <label>Importe (€)<input id="gImporte" type="number" inputmode="decimal" min="0.01" step="0.01" placeholder="24,50" aria-describedby="eImporte">
+        <label>Importe (€)<input id="gImporte" type="number" inputmode="decimal" min="0.01" step="0.01" placeholder="24,50" aria-describedby="eImporte" value="${ed ? esc(ed.amount) : ''}">
           <small class="err" id="eImporte" role="alert" hidden></small></label>
-        <label>Fecha<input id="gFecha" type="date" value="${hoy}" max="${hoy}"><small class="err" id="eFecha" role="alert" hidden></small></label>
+        <label>Fecha<input id="gFecha" type="date" value="${esc(ed ? ed.date : hoy)}" max="${hoy}"><small class="err" id="eFecha" role="alert" hidden></small></label>
       </div>
-      <label>¿Quién pagó?<select id="gPayer">${S.members.map(m => `<option value="${esc(m.id)}" ${m.id === yo ? 'selected' : ''}>${esc(m.id === yo ? m.name + ' (tú)' : m.name)}</option>`).join('')}</select></label>
+      <label>¿Quién pagó?<select id="gPayer">${S.members.map(m => `<option value="${esc(m.id)}" ${m.id === pagador ? 'selected' : ''}>${esc(m.id === yo ? m.name + ' (tú)' : m.name)}</option>`).join('')}</select></label>
       <fieldset class="seg" id="gTipo"><legend>¿Cómo se reparte?</legend>
         ${Object.entries(TIPO_REPARTO).map(([k,v]) => `<label class="seg-opt"><input type="radio" name="gTipo" value="${k}" ${k === tipo ? 'checked' : ''}><span>${v}</span></label>`).join('')}
       </fieldset>
       <fieldset id="gPart" class="parts">
         <legend>¿Quién participa?</legend>
-        ${S.members.map(m => `<div class="part-row"><label><input type="checkbox" value="${esc(m.id)}" checked> ${esc(m.id === yo ? m.name + ' (tú)' : m.name)}</label>
-          <input class="part-val" type="number" inputmode="decimal" min="0" step="0.01" data-u="${esc(m.id)}" aria-label="${tipo === 'percentage' ? 'Porcentaje' : 'Importe'} de ${esc(m.name)}" placeholder="${tipo === 'percentage' ? '%' : '€'}" ${tipo === 'equal' ? 'hidden' : ''}></div>`).join('')}
+        ${S.members.map(m => `<div class="part-row"><label><input type="checkbox" value="${esc(m.id)}" ${!ed || parte(m.id) ? 'checked' : ''}> ${esc(m.id === yo ? m.name + ' (tú)' : m.name)}</label>
+          <input class="part-val" type="number" inputmode="decimal" min="0" step="0.01" data-u="${esc(m.id)}" aria-label="${tipo === 'percentage' ? 'Porcentaje' : 'Importe'} de ${esc(m.name)}" placeholder="${tipo === 'percentage' ? '%' : '€'}" value="${esc(valor(m.id))}" ${tipo === 'equal' ? 'hidden' : ''}></div>`).join('')}
         <small class="err" id="ePart" role="alert" hidden></small>
       </fieldset>
       <p class="small dim" id="gPreview" style="margin:0" aria-live="polite"></p>
       <div style="display:flex;gap:10px;flex-wrap:wrap">
-        <button class="btn" type="submit">Guardar gasto</button>
+        <button class="btn" type="submit">${ed ? 'Guardar cambios' : 'Guardar gasto'}</button>
         <button class="btn ghost" type="button" id="gCancel">Cancelar</button>
       </div>
     </form>`;
@@ -2243,10 +2328,10 @@ function movimientosHtml(mov){
   };
   const irSaldos = g => g.shares.some(x => x.user_id !== g.paid_by) && (g.paid_by === yo || g.shares.some(x => x.user_id === yo))
     ? `<p class="small dim" style="margin:6px 0 0;line-height:1.5">Se paga todo junto en <button type="button" class="link" style="display:inline;padding:0;min-height:0" data-go="facturas" data-subgo="saldos">Saldos</button>, sin ir gasto por gasto.</p>` : '';
-  const borrar = (m, tipoTxt) => S.movDel === m.key ? `<div class="confirm" role="alertdialog" aria-label="Confirmar">
+  const borrar = (m, tipoTxt, editarId) => S.movDel === m.key ? `<div class="confirm" role="alertdialog" aria-label="Confirmar">
         <span>¿${tipoTxt}? ${m.tipo === 'pago' ? 'Dejará de contar en los saldos.' : 'Nadie seguirá debiendo nada por él.'}</span>
         <span class="row"><button class="btn small danger" data-mdel-ok="${esc(m.key)}">Sí</button><button class="btn small ghost" data-mdel-no>Cancelar</button></span></div>`
-      : `<span class="acts"><button type="button" class="link" data-mdel="${esc(m.key)}">${m.tipo === 'pago' ? 'Deshacer' : 'Eliminar'}</button></span>`;
+      : `<span class="acts">${editarId ? `<button type="button" class="link" data-medit="${esc(editarId)}">Editar</button>` : ''}<button type="button" class="link" data-mdel="${esc(m.key)}">${m.tipo === 'pago' ? 'Deshacer' : 'Eliminar'}</button></span>`;
   const nb = u => nombreDe(u) + ' ' + (S.members.find(x => x.id === u)?.name || '');   // «Tú» y también tu nombre
   const buscaGasto = (g, tipo) => esc(norm([tipo, g.name, nb(g.paid_by), ...g.shares.map(x => nb(x.user_id)), eur(g.amount), String(g.amount).replace('.', ','), fmtDate(g.date)].join(' ')));
   const item = m => {
@@ -2272,7 +2357,7 @@ function movimientosHtml(mov){
         <span class="right"><span class="amount">${eur(g.amount)}</span><span class="small dim">${resumen}</span></span></span>
       ${chipsReparto(g, u => u === g.paid_by)}
       ${irSaldos(g)}
-      ${g.created_by === yo || g.paid_by === yo ? borrar(m, `Eliminar «${esc(g.name)}» (${eur(g.amount)})`) : ''}</li>`;
+      ${g.created_by === yo || g.paid_by === yo ? borrar(m, `Eliminar «${esc(g.name)}» (${eur(g.amount)})`, g.id) : ''}</li>`;
   };
   const cuenta = t => mov.filter(m => t === 'todos' || m.tipo === t).length;
   return `<section class="sec" id="movs">
@@ -2399,6 +2484,11 @@ function bindGastos(bills, mov){
   const qm = $('#qMov'); if (qm){ qm.addEventListener('input', () => { S.qMov = qm.value; filtrarMov(); }); }
   filtrarMov();
   app.querySelectorAll('[data-mdel]').forEach(b => b.onclick = () => { S.movDel = b.dataset.mdel; re(); });
+  app.querySelectorAll('[data-medit]').forEach(b => b.onclick = async () => {
+    const m = mov.find(x => x.tipo === 'suelto' && x.g.id === b.dataset.medit); if (!m) return;
+    S.gastoEdit = m.g; S.gastoTipo = null; S.gastoForm = true; S.movDel = null; await re();
+    $('#fGasto')?.scrollIntoView({behavior:'smooth', block:'start'}); $('#gImporte')?.focus({preventScroll:true});
+  });
   app.querySelectorAll('[data-mdel-no]').forEach(b => b.onclick = () => { S.movDel = null; re(); });
   app.querySelectorAll('[data-mdel-ok]').forEach(b => b.onclick = async () => {
     b.disabled = true; const [t, idm] = [b.dataset.mdelOk.slice(0,1), b.dataset.mdelOk.slice(2)];
@@ -2422,7 +2512,7 @@ function bindGastos(bills, mov){
 }
 
 function bindFormGasto(){
-  const add = $('#gAdd'); if (add) add.onclick = async () => { S.gastoForm = true; S.movDel = null; await renderFacturas(); $('#gImporte')?.focus(); };
+  const add = $('#gAdd'); if (add) add.onclick = async () => { S.gastoForm = true; S.gastoEdit = null; S.gastoTipo = null; S.movDel = null; await renderFacturas(); $('#gImporte')?.focus(); };
   const f = $('#fGasto'); if (!f) return;
   const tipo = () => f.querySelector('input[name=gTipo]:checked').value;
   const filas = () => [...f.querySelectorAll('.part-row')].map(r => ({u:r.querySelector('input[type=checkbox]').value, on:r.querySelector('input[type=checkbox]').checked, val:r.querySelector('.part-val')}));
@@ -2444,7 +2534,7 @@ function bindFormGasto(){
   $('#gFecha').addEventListener('input', () => clearFieldError('gFecha'));
   f.querySelectorAll('#gPart input').forEach(i => i.addEventListener('input', () => { clearFieldError('gPart'); preview(); }));
   f.querySelectorAll('#gPart input[type=checkbox]').forEach(i => i.addEventListener('change', preview));
-  $('#gCancel').onclick = async () => { S.gastoForm = false; await renderFacturas(); };
+  $('#gCancel').onclick = async () => { S.gastoForm = false; S.gastoEdit = null; S.gastoTipo = null; await renderFacturas(); };
   const fail = (idc, msg) => { const er = document.getElementById('e' + idc.slice(1)); er.textContent = msg; er.hidden = false; const el = document.getElementById(idc); el.setAttribute('aria-invalid','true'); return el; };
   f.onsubmit = async e => {
     e.preventDefault();
@@ -2463,8 +2553,10 @@ function bindFormGasto(){
     const btn = f.querySelector('button[type=submit]'); btn.disabled = true;
     const description = $('#gConcepto').value.trim() || 'Gasto sin concepto';
     try{
-      await S.api.addExpense(S.apt.id, {description, amount, paid_by:$('#gPayer').value, participants, split:t, values, date});
-      S.gastoForm = false; S.movFiltro = 'todos'; toast(`Gasto anotado: ${eur(amount)} entre ${participants.length}.`);
+      const datos = {description, amount, paid_by:$('#gPayer').value, participants, split:t, values, date};
+      if (S.gastoEdit){ await S.api.updateExpense(S.gastoEdit.id, datos); toast(`Gasto actualizado: ${eur(amount)} entre ${participants.length}.`); }
+      else { await S.api.addExpense(S.apt.id, datos); toast(`Gasto anotado: ${eur(amount)} entre ${participants.length}.`); }
+      S.gastoForm = false; S.gastoEdit = null; S.gastoTipo = null; S.movFiltro = 'todos';
       await renderFacturas();
     }catch(err){ btn.disabled = false; toast(friendly(err)); }   // el formulario conserva lo escrito
   };
