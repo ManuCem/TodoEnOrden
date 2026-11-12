@@ -270,6 +270,13 @@ input.invalid,select.invalid{border-color:var(--bad)}
 .day:first-child{margin-top:6px}
 .day .n{font-weight:800;color:var(--muted);letter-spacing:0}
 .empty{padding:18px 0;color:var(--muted);font-size:15px;display:block!important;min-height:0!important;text-align:center}
+/* Buscador (Compra y Gastos) */
+.buscador{margin:4px 0 10px}
+.buscador .bwrap{position:relative;display:block}
+.buscador input{width:100%;padding-left:40px}
+.buscador svg{position:absolute;left:13px;top:50%;transform:translateY(-50%);color:var(--muted);pointer-events:none}
+.buscador small{display:block;margin:6px 2px 0;color:var(--muted);font-size:13px}
+.oculto,.empty.oculto,.list li.oculto{display:none!important}
 
 /* tramos de la semana */
 .seg{display:flex;gap:4px;margin:12px 0 6px}
@@ -504,6 +511,10 @@ function friendly(err){
   if (/row-level security/i.test(m)) return 'La base de datos no te deja hacer eso con tu usuario.';
   return m;
 }
+/* Buscador: sin distinguir mayúsculas ni tildes; filtra lo que ya está en pantalla, sin volver a cargar */
+const norm = t => String(t || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+const LUPA = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>';
+const buscadorHtml = (id, ph, val) => `<div class="buscador" role="search"><span class="bwrap">${LUPA}<input id="${id}" type="search" placeholder="${ph}" aria-label="${ph}" autocomplete="off" value="${esc(val || '')}"></span><small id="${id}Res" aria-live="polite"></small></div>`;
 const CHECK = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7"/></svg>';
 const PENCIL = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20l4-1 11-11-3-3L5 16l-1 4z"/><path d="M14 7l3 3"/></svg>';
 const CROSS = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>';
@@ -1888,11 +1899,27 @@ function filaCompra(i){
       <button class="btn small" type="submit">Guardar</button>
       <button class="btn ghost small" type="button" id="cancelEdit">Cancelar</button></form></li>`;
   return `
-    <li><button class="check" aria-pressed="${i.is_bought}" data-b="${esc(i.id)}" aria-label="${i.is_bought?'Marcar como pendiente':'Marcar como comprado'}: ${esc(i.name)}">${CHECK}</button>
+    <li data-busca="${esc(norm(i.name + ' ' + (i.is_bought ? quienCompro(i) : '')))}"><button class="check" aria-pressed="${i.is_bought}" data-b="${esc(i.id)}" aria-label="${i.is_bought?'Marcar como pendiente':'Marcar como comprado'}: ${esc(i.name)}">${CHECK}</button>
       ${i.is_bought ? `<span class="grow"><span class="name done">${esc(i.name)}</span><br><span class="small dim">${esc(quienCompro(i))}</span>${precioCompra(i)}</span>`
         : `<span class="grow name">${esc(i.name)}</span>`}
       <button class="x" data-e="${esc(i.id)}" aria-label="Editar ${esc(i.name)}">${PENCIL}</button>
       <button class="x" data-d="${esc(i.id)}" aria-label="Quitar ${esc(i.name)}">${CROSS}</button></li>`;
+}
+// Oculta los productos que no coinciden (en Por comprar y en Ya comprado) y los días que se quedan vacíos
+function filtrarCompra(){
+  const q = norm(S.qCompra).trim(), res = $('#qCompraRes'); if (!res) return;
+  let total = 0;
+  app.querySelectorAll('[data-g]').forEach(g => {
+    let n = 0;
+    g.querySelectorAll('li[data-busca]').forEach(li => { const si = !q || li.dataset.busca.includes(q); li.classList.toggle('oculto', !si); if (si) n++; });
+    g.querySelectorAll('ul.list').forEach(ul => { const vacio = !ul.querySelector('li[data-busca]:not(.oculto)');
+      ul.classList.toggle('oculto', !!q && vacio); const d = ul.previousElementSibling; if (d && d.classList.contains('day')) d.classList.toggle('oculto', !!q && vacio); });
+    let msg = g.querySelector('.busca-vacio');
+    if (!msg){ msg = document.createElement('p'); msg.className = 'empty busca-vacio oculto'; g.appendChild(msg); }
+    msg.textContent = `Nada coincide con «${(S.qCompra || '').trim()}».`; msg.classList.toggle('oculto', !q || n > 0);
+    total += n;
+  });
+  res.textContent = q ? (total ? `${total} ${total === 1 ? 'producto' : 'productos'} con «${(S.qCompra || '').trim()}»` : '') : '';
 }
 async function renderCompra(){
   const items = await S.api.items(S.apt.id);
@@ -1911,6 +1938,7 @@ async function renderCompra(){
 
   app.innerHTML = `${header('Compra común')}${subtabsHtml('compra', {pend:pend.length, hechos:comprados.length})}
     <section class="sec">
+      ${items.length ? buscadorHtml('qCompra', 'Buscar en la compra…', S.qCompra) : ''}
       <div data-g="pend">
       <div class="sec-head"><h2>Por comprar</h2><span class="count">${pend.length}</span></div>
       <p class="sub">Lo que falta en casa, agrupado por el día en que se apuntó. Tacha lo que compres.</p>
@@ -1928,6 +1956,8 @@ async function renderCompra(){
       </div>
     </section>`;
   aplicarSub('compra');
+  const qc = $('#qCompra');
+  if (qc){ const f = () => { S.qCompra = qc.value; filtrarCompra(); }; qc.addEventListener('input', f); filtrarCompra(); }
 
   $('#fItem').onsubmit = e => run(e, async () => { await S.api.addItem(S.apt.id, $('#itemName').value.trim()); await renderCompra(); });
   // si tenía su gasto anotado, al destacharlo o quitarlo se elimina ese gasto (nadie sigue debiendo por él)
@@ -2199,7 +2229,7 @@ function formGastoHtml(){
 function movimientosHtml(mov){
   const yo = S.api.uid, filtro = S.movFiltro || 'todos';
   const lista = mov.filter(m => filtro === 'todos' || m.tipo === filtro);
-  const visibles = S.movTodos ? lista : lista.slice(0, 8);
+  const visibles = lista;   // los que pasan de 8 se ocultan con «Ver más» (el buscador busca en todos)
   // Cada parte dice a quién se le debe: siempre a quien adelantó el dinero
   const chipsReparto = (g, pagado) => {
     const acreedor = nombreDe(g.paid_by), deudores = g.shares.filter(x => x.user_id !== g.paid_by && !pagado(x.user_id));
@@ -2217,8 +2247,10 @@ function movimientosHtml(mov){
         <span>¿${tipoTxt}? ${m.tipo === 'pago' ? 'Dejará de contar en los saldos.' : 'Nadie seguirá debiendo nada por él.'}</span>
         <span class="row"><button class="btn small danger" data-mdel-ok="${esc(m.key)}">Sí</button><button class="btn small ghost" data-mdel-no>Cancelar</button></span></div>`
       : `<span class="acts"><button type="button" class="link" data-mdel="${esc(m.key)}">${m.tipo === 'pago' ? 'Deshacer' : 'Eliminar'}</button></span>`;
+  const nb = u => nombreDe(u) + ' ' + (S.members.find(x => x.id === u)?.name || '');   // «Tú» y también tu nombre
+  const buscaGasto = (g, tipo) => esc(norm([tipo, g.name, nb(g.paid_by), ...g.shares.map(x => nb(x.user_id)), eur(g.amount), String(g.amount).replace('.', ','), fmtDate(g.date)].join(' ')));
   const item = m => {
-    if (m.tipo === 'pago') return `<li class="mov pago"><span class="mov-top"><span><span class="tag-mov">Pago</span>${m.from === yo ? `Pagaste a <b>${esc(nombreDe(m.to))}</b>` : m.to === yo ? `<b>${esc(nombreDe(m.from))}</b> te pagó` : `<b>${esc(nombreDe(m.from))}</b> pagó a <b>${esc(nombreDe(m.to))}</b>`}<br>
+    if (m.tipo === 'pago') return `<li class="mov pago" data-busca="${esc(norm(['pago', nb(m.from), nb(m.to), eur(m.amount), fmtDate(m.date)].join(' ')))}"><span class="mov-top"><span><span class="tag-mov">Pago</span>${m.from === yo ? `Pagaste a <b>${esc(nombreDe(m.to))}</b>` : m.to === yo ? `<b>${esc(nombreDe(m.from))}</b> te pagó` : `<b>${esc(nombreDe(m.from))}</b> pagó a <b>${esc(nombreDe(m.to))}</b>`}<br>
         <span class="small dim">${esc(fmtDate(m.date))}</span></span><span class="amount">${eur(m.amount)}</span></span>
         ${m.created_by === yo ? borrar(m, 'Deshacer este pago') : ''}</li>`;
     const g = m.g, iguales = g.shares.length && g.shares.every(x => Math.abs(x.amount - g.shares[g.shares.length-1].amount) < 0.015);
@@ -2227,7 +2259,7 @@ function movimientosHtml(mov){
       const marcado = u => m.pagos.some(p => p.bill_id === g.bill_id && p.due_date === g.date && p.user_id === u);
       const pagado = u => u === g.paid_by || marcado(u);
       const mia = g.shares.find(x => x.user_id === yo), yoPago = marcado(yo), faltan = g.shares.filter(x => !pagado(x.user_id)).length;
-      return `<li class="mov factura"><span class="mov-top"><span><span class="tag-mov">Factura</span><span class="name">${esc(g.name)}</span><br>
+      return `<li class="mov factura" data-busca="${buscaGasto(g, 'factura')}"><span class="mov-top"><span><span class="tag-mov">Factura</span><span class="name">${esc(g.name)}</span><br>
           <span class="small dim">Vencimiento del ${esc(fmtDate(g.date))} · ${g.paid_by === yo ? 'la adelantaste tú' : 'la adelantó ' + esc(nombreDe(g.paid_by))}</span></span>
           <span class="right"><span class="amount">${eur(g.amount)}</span><span class="small dim">${resumen}</span></span></span>
         ${chipsReparto(g, pagado)}
@@ -2235,7 +2267,7 @@ function movimientosHtml(mov){
         ${faltan === 0 ? '<span class="meta-line"><span class="state ok">Saldado entre todos</span></span>' : ''}
         ${g.created_by === yo || g.paid_by === yo ? borrar(m, `Eliminar el gasto de «${esc(g.name)}» del ${esc(fmtDate(g.date))} (${eur(g.amount)})`) : ''}</li>`;
     }
-    return `<li class="mov suelto"><span class="mov-top"><span><span class="tag-mov">Gasto</span><span class="name">${esc(g.name)}</span><br>
+    return `<li class="mov suelto" data-busca="${buscaGasto(g, 'gasto')}"><span class="mov-top"><span><span class="tag-mov">Gasto</span><span class="name">${esc(g.name)}</span><br>
         <span class="small dim">${esc(fmtDate(g.date))} · ${g.paid_by === yo ? 'pagaste tú' : 'pagó ' + esc(nombreDe(g.paid_by))}</span></span>
         <span class="right"><span class="amount">${eur(g.amount)}</span><span class="small dim">${resumen}</span></span></span>
       ${chipsReparto(g, u => u === g.paid_by)}
@@ -2249,8 +2281,9 @@ function movimientosHtml(mov){
     ${S.gastoForm ? formGastoHtml() : '<button class="btn" id="gAdd">Anotar gasto</button>'}
     <div class="filtros" role="group" aria-label="Filtrar movimientos">${[['todos','Todos'],['suelto','Gastos'],['factura','Facturas'],['pago','Pagos']].map(([k,v]) =>
       `<button type="button" class="filtro" data-filtro="${k}" aria-pressed="${filtro === k}">${v} <span>${cuenta(k)}</span></button>`).join('')}</div>
-    ${visibles.length ? `<ul class="list receipt">${visibles.map(item).join('')}</ul>` : '<p class="empty">No hay movimientos de este tipo.</p>'}
-    ${lista.length > visibles.length ? `<button class="btn ghost small" id="movMas" style="margin-top:10px">Ver ${lista.length - visibles.length} más</button>` : ''}
+    ${mov.length ? buscadorHtml('qMov', 'Buscar: concepto, persona, importe…', S.qMov) : ''}
+    ${visibles.length ? `<ul class="list receipt" id="movList">${visibles.map(item).join('')}</ul><p class="empty busca-vacio oculto" id="movVacio"></p>` : '<p class="empty">No hay movimientos de este tipo.</p>'}
+    <button class="btn ghost small oculto" id="movMas" style="margin-top:10px"></button>
   </section>`;
 }
 
@@ -2337,6 +2370,18 @@ async function renderFacturas(){
   bindGastos(bills, mov);
 }
 
+// Movimientos: con búsqueda se ven todos los que coinciden; sin búsqueda, los 8 primeros y «Ver más»
+function filtrarMov(){
+  const ul = $('#movList'); if (!ul) return;
+  const q = norm(S.qMov).trim(), lis = [...ul.querySelectorAll('li[data-busca]')], mas = $('#movMas'), res = $('#qMovRes'), vacio = $('#movVacio');
+  let n = 0, k = 0;
+  lis.forEach(li => { const si = !q || li.dataset.busca.includes(q); if (si) n++;
+    const ver = si && (q || S.movTodos || k < 8); if (si && !q) k++; li.classList.toggle('oculto', !ver); });
+  const ocultos = q ? 0 : lis.length - Math.min(lis.length, S.movTodos ? lis.length : 8);
+  if (mas){ mas.textContent = `Ver ${ocultos} más`; mas.classList.toggle('oculto', ocultos <= 0); }
+  if (res) res.textContent = q && n ? `${n} ${n === 1 ? 'movimiento' : 'movimientos'} con «${S.qMov.trim()}»` : '';
+  if (vacio){ vacio.textContent = `Nada coincide con «${(S.qMov || '').trim()}».`; vacio.classList.toggle('oculto', !q || n > 0); }
+}
 function bindGastos(bills, mov){
   const re = () => renderFacturas();
   // Saldar
@@ -2350,7 +2395,9 @@ function bindGastos(bills, mov){
   });
   // Movimientos: filtros, ver más, eliminar / deshacer
   app.querySelectorAll('[data-filtro]').forEach(b => b.onclick = () => { S.movFiltro = b.dataset.filtro; S.movTodos = false; re(); });
-  const mas = $('#movMas'); if (mas) mas.onclick = () => { S.movTodos = true; re(); };
+  const mas = $('#movMas'); if (mas) mas.onclick = () => { S.movTodos = true; filtrarMov(); };
+  const qm = $('#qMov'); if (qm){ qm.addEventListener('input', () => { S.qMov = qm.value; filtrarMov(); }); }
+  filtrarMov();
   app.querySelectorAll('[data-mdel]').forEach(b => b.onclick = () => { S.movDel = b.dataset.mdel; re(); });
   app.querySelectorAll('[data-mdel-no]').forEach(b => b.onclick = () => { S.movDel = null; re(); });
   app.querySelectorAll('[data-mdel-ok]').forEach(b => b.onclick = async () => {
