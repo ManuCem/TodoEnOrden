@@ -593,11 +593,11 @@ function remoteApi(sb, uid){
     async assignments(aptId, week){
       ok(await sb.rpc('ensure_week_assignments',{p_apartment_id:aptId,p_week_start:week}));
       const rows = ok(await sb.from('cleaning_assignments').select('id,user_id,is_done,done_at,cleaning_zones(name),profiles(full_name)').eq('apartment_id', aptId).eq('week_start', week));
-      return rows.map(r => ({id:r.id,user_id:r.user_id,is_done:r.is_done,done_at:r.done_at,zone:r.cleaning_zones?.name || '—',name:r.profiles?.full_name || 'Sin nombre'})).sort((a,b)=>a.zone.localeCompare(b.zone,'es'));
+      return rows.map(r => ({id:r.id,user_id:r.user_id,is_done:r.is_done,done_at:r.done_at,zone:r.cleaning_zones?.name || '—',name:r.profiles?.full_name || 'Antiguo compañero'})).sort((a,b)=>a.zone.localeCompare(b.zone,'es'));
     },
     async history(aptId, fromWeek){
       const rows = ok(await sb.from('cleaning_assignments').select('id,user_id,week_start,is_done,done_at,cleaning_zones(name),profiles(full_name)').eq('apartment_id', aptId).gte('week_start', fromWeek).order('week_start',{ascending:false}).limit(300));
-      return rows.map(r => ({id:r.id,user_id:r.user_id,week:r.week_start,is_done:r.is_done,done_at:r.done_at,zone:r.cleaning_zones?.name || '—',name:r.profiles?.full_name || 'Sin nombre'}))
+      return rows.map(r => ({id:r.id,user_id:r.user_id,week:r.week_start,is_done:r.is_done,done_at:r.done_at,zone:r.cleaning_zones?.name || '—',name:r.profiles?.full_name || 'Antiguo compañero'}))
         .sort((a,b)=> b.week.localeCompare(a.week) || a.zone.localeCompare(b.zone,'es'));
     },
     async weekStart(){ return ok(await sb.rpc('current_week_start')); },
