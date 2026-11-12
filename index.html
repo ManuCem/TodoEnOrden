@@ -2178,7 +2178,19 @@ function movimientosHtml(mov){
   const yo = S.api.uid, filtro = S.movFiltro || 'todos';
   const lista = mov.filter(m => filtro === 'todos' || m.tipo === filtro);
   const visibles = S.movTodos ? lista : lista.slice(0, 8);
-  const chipsReparto = (g, pagado) => `<span class="meta-line">${g.shares.map(x => `<span class="state ${pagado(x.user_id) ? 'ok' : ''}">${esc(nombreDe(x.user_id))} ${eur(x.amount)}${pagado(x.user_id) && x.user_id !== g.paid_by ? ' ✓' : ''}</span>`).join('')}</span>`;
+  // Cada parte dice a quién se le debe: siempre a quien adelantó el dinero
+  const chipsReparto = (g, pagado) => {
+    const acreedor = nombreDe(g.paid_by), deudores = g.shares.filter(x => x.user_id !== g.paid_by && !pagado(x.user_id));
+    const cabecera = !deudores.length ? '' : g.paid_by === yo ? '<b>Te deben a ti:</b>' : `<b>Le deben a ${esc(acreedor)}:</b>`;
+    return `${cabecera ? `<span class="meta-line small dim" style="margin-bottom:-2px">${cabecera}</span>` : ''}<span class="meta-line">${g.shares.map(x => {
+      const n = esc(nombreDe(x.user_id)), cant = eur(x.amount);
+      if (x.user_id === g.paid_by) return `<span class="state ok">${n} ${cant} · ${x.user_id === yo ? 'pagaste' : 'pagó'}</span>`;
+      if (pagado(x.user_id)) return `<span class="state ok">${n} → ${esc(acreedor)} ${cant} ✓</span>`;
+      return `<span class="state">${n} → ${esc(acreedor)} ${cant}</span>`;
+    }).join('')}</span>`;
+  };
+  const irSaldos = g => g.shares.some(x => x.user_id !== g.paid_by) && (g.paid_by === yo || g.shares.some(x => x.user_id === yo))
+    ? `<p class="small dim" style="margin:6px 0 0;line-height:1.5">Se paga todo junto en <button type="button" class="link" style="display:inline;padding:0;min-height:0" data-go="facturas" data-subgo="saldos">Saldos</button>, sin ir gasto por gasto.</p>` : '';
   const borrar = (m, tipoTxt) => S.movDel === m.key ? `<div class="confirm" role="alertdialog" aria-label="Confirmar">
         <span>¿${tipoTxt}? Dejará de contar en los saldos.</span>
         <span class="row"><button class="btn small danger" data-mdel-ok="${esc(m.key)}">Sí</button><button class="btn small ghost" data-mdel-no>Cancelar</button></span></div>`
@@ -2204,6 +2216,7 @@ function movimientosHtml(mov){
         <span class="small dim">${esc(fmtDate(g.date))} · ${g.paid_by === yo ? 'pagaste tú' : 'pagó ' + esc(nombreDe(g.paid_by))}</span></span>
         <span class="right"><span class="amount">${eur(g.amount)}</span><span class="small dim">${resumen}</span></span></span>
       ${chipsReparto(g, u => u === g.paid_by)}
+      ${irSaldos(g)}
       ${g.created_by === yo ? borrar(m, `Eliminar «${esc(g.name)}» (${eur(g.amount)})`) : ''}</li>`;
   };
   const cuenta = t => mov.filter(m => t === 'todos' || m.tipo === t).length;
