@@ -274,6 +274,23 @@ input.invalid,select.invalid{border-color:var(--bad)}
 .day::after{content:"";flex:1;height:1.5px;background:var(--accent-soft)}
 .day:first-child{margin-top:6px}
 .day .n{font-weight:800;color:var(--muted);letter-spacing:0}
+/* TEO-21: lo que se está acabando, destacado arriba como prioritario */
+.day.low{color:var(--alert-ink)}
+.day.low::after{background:var(--alert-ink);opacity:.35}
+.list li.low{background-color:var(--alert-bg);border-left:5px solid var(--alert-ink);border-top-color:transparent;border-radius:12px;padding-left:8px;padding-right:0;gap:8px;margin:4px 0}
+.list li.low .grow{overflow-wrap:break-word}
+.list li.low .x{width:36px}
+.chip.baja{margin:2px 8px 0 0;background:var(--alert-ink);color:var(--alert-bg);font-size:12px;padding:1px 9px;white-space:nowrap}
+.lowbtn{display:inline-block;background:none;border:0;padding:2px 0;margin-top:2px;min-height:32px;font-size:13px;font-weight:700;color:var(--muted);text-decoration:underline;text-underline-offset:3px}
+.lowbtn:hover{color:var(--accent)}
+li.low .lowbtn{color:var(--alert-ink)}
+.despensa{margin:12px 0 6px;padding:2px 12px 12px;border:1.5px dashed var(--line);border-radius:12px}
+.despensa summary{min-height:48px;display:flex;align-items:center;flex-wrap:wrap;gap:2px 8px;cursor:pointer;font-weight:800;font-size:15px}
+.despensa:not([open]){padding-bottom:0}
+.despensa p{margin:0 0 8px}
+.despensa .chips{display:flex;flex-wrap:wrap;gap:8px}
+.despchip{min-height:40px;padding:0 14px;border-radius:99px;border:1.5px solid var(--line);background:var(--paper);color:var(--ink);font-size:15px;font-weight:700;max-width:100%;overflow-wrap:anywhere}
+.despchip:hover{border-color:var(--alert-ink)}
 .empty{padding:18px 0;color:var(--muted);font-size:15px;display:block!important;min-height:0!important;text-align:center}
 /* Buscador (Compra y Gastos) */
 .buscador{margin:4px 0 10px}
@@ -602,13 +619,20 @@ function remoteApi(sb, uid){
       const r = ok(await sb.from('apartment_balances').select('balance').eq('apartment_id', aptId).eq('user_id', uid).maybeSingle());
       return Number(r?.balance ?? 0);
     },
-    async items(aptId){ return ok(await sb.from('shopping_items').select('id,name,is_bought,created_at,bought_by,bought_at,expense_id,expense:expense_id(amount,deleted_at)').eq('apartment_id', aptId).order('is_bought').order('created_at',{ascending:false})); },
+    async items(aptId){ return ok(await sb.from('shopping_items').select('id,name,is_bought,created_at,bought_by,bought_at,expense_id,running_low,low_by,low_at,expense:expense_id(amount,deleted_at)').eq('apartment_id', aptId).order('is_bought').order('created_at',{ascending:false})); },
     async addItem(aptId,name){ ok(await sb.from('shopping_items').insert({apartment_id:aptId,name})); },
     // TEO-19: tachar (true) o destachar (false). Quién y cuándo lo guarda un trigger de la base de datos.
     async setBought(id,v){
       const rows = ok(await sb.from('shopping_items').update({is_bought:v}).eq('id', id).select('id'));
       if (!rows || !rows.length) throw new Error('Ese producto ya no está en la lista.');
     },
+    // TEO-21: avisar de que algo se acaba (true) o quitar el aviso (false). Quién avisó lo guarda la base de datos; al tacharlo comprado se apaga solo.
+    async setLow(id,v){
+      const rows = ok(await sb.from('shopping_items').update({running_low:v}).eq('id', id).select('id'));
+      if (!rows || !rows.length) throw new Error('Ese producto ya no está en la lista.');
+    },
+    // Avisar por nombre: lo crea si no existe, lo marca si está pendiente y lo devuelve a pendiente si estaba tachado
+    async reportLow(aptId,name){ return ok(await sb.rpc('report_running_low', {p_apartment_id:aptId, p_name:name})); },
     async delItem(id){ ok(await sb.from('shopping_items').delete().eq('id', id)); },
     async renameItem(id,name){ ok(await sb.from('shopping_items').update({name}).eq('id', id)); },
     async zones(aptId){ return ok(await sb.from('cleaning_zones').select('id,name').eq('apartment_id', aptId).order('created_at')); },
@@ -703,7 +727,7 @@ const PISOS = {
   lavapies: { nombre:'Piso de Lavapiés', code:'K7P2QX',
     miembros:['Marta','Leo','Sara'],
     zonas:['Baño','Cocina','Salón','Terraza','Pasillo','Basura y reciclaje'],
-    compra:[['Leche',0,0],['Café',0,0],['Plátanos',0,0],['Papel higiénico',0,1],['Detergente',0,1],
+    compra:[['Leche',0,0],['Café',0,0],['Plátanos',0,0],['Papel higiénico',0,1,0,0,1],['Detergente',0,1],
             ['Bolsas de basura',0,2],['Aceite de oliva',0,3],['Arroz',0,3],['Tomate frito',0,5],
             ['Pan',1,0],['Huevos',1,1],['Yogures',1,2]],
     facturas:[['Luz',72.4,'monthly',2,0,0],['Comunidad',45,'quarterly',6,0,0],['Internet',39.9,'monthly',16,1,0],
@@ -715,7 +739,7 @@ const PISOS = {
     zonas:['Baño grande','Baño pequeño','Cocina','Salón','Pasillo y entrada','Basura y reciclaje','Terraza'],
     // [producto, comprado, hace días, quién lo compró, lo que costó]
     compra:[['Leche semidesnatada',0,0],['Huevos (docena)',0,0],['Pan de molde',0,0],['Plátanos',0,0],
-            ['Café molido',0,1],['Papel higiénico',0,1],['Lavavajillas',0,1],
+            ['Café molido',0,1],['Papel higiénico',0,1,0,0,1],['Lavavajillas',0,1,0,0,1],
             ['Pechuga de pollo',0,2],['Tomate frito',0,2],['Espaguetis',0,2],
             ['Arroz',0,3],['Aceite de oliva',0,3],['Bolsas de basura',0,4],['Fregasuelos',0,4],['Atún en lata',0,5],['Esponjas',0,6],
             ['Yogures',1,0,1,2.85],['Queso rallado',1,0,0],['Cereales',1,1,2,3.49],['Detergente para la ropa',1,1,0,7.95],
@@ -774,7 +798,7 @@ function demoApi(clave){
     myName: P.miembros[0],
     apt: { id:'apt-'+pisoDemo, name:P.nombre, invite_code:P.code },
     members: P.miembros.map((n,i) => ({ id:uid(i), name:n })),
-    items: P.compra.map(([name,b,dias,quien,precio],i) => ({ id:'i'+i, name, is_bought:!!b, created_at:new Date(Date.now()-(dias||0)*864e5 - (i%5)*36e5).toISOString(), precio: b && precio ? precio : null,
+    items: P.compra.map(([name,b,dias,quien,precio,bajo],i) => ({ id:'i'+i, name, is_bought:!!b, running_low: !b && !!bajo, low_by: !b && bajo ? uid((i+1) % P.miembros.length) : null, low_at: !b && bajo ? new Date(Date.now()-(dias||0)*864e5 - 36e5).toISOString() : null, created_at:new Date(Date.now()-(dias||0)*864e5 - (i%5)*36e5).toISOString(), precio: b && precio ? precio : null,
       bought_by: b ? uid(quien ?? (i % P.miembros.length)) : null, bought_at: b ? new Date(Math.min(Date.now()-6e5, Date.now()-(dias||0)*864e5 - i*36e5 + 72e5)).toISOString() : null })),
     zones: P.zonas.map((name,i) => ({ id:'z'+i, name })),
     done: {},
@@ -934,11 +958,20 @@ function demoApi(clave){
     myBalance:()=>wait(P.saldo),
     items:()=>wait(db.items.slice().sort((a,b)=>a.is_bought-b.is_bought || b.created_at.localeCompare(a.created_at)).map(i => {
       const g = i.expense_id ? db.manual.find(x => x.id === i.expense_id) : null; return {...i, expense: g ? {amount:g.amount, deleted_at:null} : null}; })),
-    addItem:(a,name)=>{ if (db.items.some(i=>i.name.toLowerCase()===name.toLowerCase())) return Promise.reject({code:'23505',message:'dup'}); db.items.push({id:id('i'),name,is_bought:false,created_at:new Date().toISOString()}); return wait(); },
+    addItem:(a,name)=>{ if (db.items.some(i=>i.name.toLowerCase()===name.toLowerCase())) return Promise.reject({code:'23505',message:'dup'}); db.items.push({id:id('i'),name,is_bought:false,running_low:false,created_at:new Date().toISOString()}); return wait(); },
     setBought:(i,v)=>{ const x = db.items.find(y=>y.id===i); if (!x) return Promise.reject(new Error('Ese producto ya no está en la lista.'));
       if (!v && x.is_bought){ const err = quitarGastoCompra(x); if (err) return Promise.reject(new Error(err)); x.expense_id = null; }
       if (v && !x.is_bought){ x.bought_by = me; x.bought_at = new Date().toISOString(); } if (!v){ x.bought_by = null; x.bought_at = null; }
-      x.is_bought = v; return wait(); },
+      x.is_bought = v; if (v){ x.running_low = false; x.low_by = null; x.low_at = null; } return wait(); },
+    setLow:(i,v)=>{ const x = db.items.find(y=>y.id===i); if (!x) return Promise.reject(new Error('Ese producto ya no está en la lista.'));
+      if (x.is_bought) return Promise.reject(new Error('Ese producto ya está comprado.'));
+      x.running_low = !!v; x.low_by = v ? me : null; x.low_at = v ? new Date().toISOString() : null; return wait(); },
+    reportLow:(a,name)=>{ name = String(name || '').trim(); if (!name || name.length > 80) return Promise.reject(new Error('Escribe el nombre del producto (máximo 80 letras)'));
+      let x = db.items.find(y => y.name.trim().toLowerCase() === name.toLowerCase());
+      if (!x){ x = {id:id('i'), name, is_bought:false, created_at:new Date().toISOString()}; db.items.push(x); }
+      else if (x.is_bought){ x.is_bought = false; x.bought_by = null; x.bought_at = null; x.expense_id = null; }   // el gasto anotado se queda en Gastos
+      if (!x.running_low){ x.running_low = true; x.low_by = me; x.low_at = new Date().toISOString(); }
+      return wait(x.id); },
     delItem:i=>{ const x = db.items.find(y=>y.id===i); const err = x && quitarGastoCompra(x); if (err) return Promise.reject(new Error(err)); db.items=db.items.filter(y=>y.id!==i); return wait(); },
     renameItem:(i,name)=>{ if (db.items.some(x=>x.id!==i && x.name.toLowerCase()===name.toLowerCase())) return Promise.reject({code:'23505',message:'dup'}); db.items.find(x=>x.id===i).name=name; return wait(); },
     zones:()=>wait(db.zones.slice()),
@@ -997,7 +1030,7 @@ function demoApi(clave){
       const parts = [me, ...db.members.map(m => m.id).filter(u => u !== me)];
       const g = {id:id('g'), name:'Compra: ' + it.name, amount:Math.round(amount*100)/100, date:iso(new Date()), paid_by:me, created_by:me, created_at:new Date().toISOString(), shares:repartir(amount, parts)};
       db.manual.push(g);
-      if (!it.is_bought){ it.is_bought = true; it.bought_by = me; it.bought_at = new Date().toISOString(); }
+      if (!it.is_bought){ it.is_bought = true; it.running_low = false; it.low_by = null; it.low_at = null; it.bought_by = me; it.bought_at = new Date().toISOString(); }
       it.expense_id = g.id; return wait(g.id); },
     delExpense:(gid)=>{ const lista = db.manual.some(g => g.id === gid) ? db.manual : db.gastos, k = lista.findIndex(g => g.id === gid);
       if (k < 0) return Promise.reject(new Error('Ese gasto no existe o no es de tu piso'));
@@ -1505,6 +1538,7 @@ async function renderPerfil(){
   const card = ({ a, mem, items, zones, bills }) => {
     const actual = S.apt && S.apt.id === a.id;
     const pend = items.filter(i => !i.is_bought).length;
+    const bajos = items.filter(i => !i.is_bought && i.running_low).length;
     const total = bills.filter(b => !b.is_paused).reduce((n, b) => n + Number(b.amount), 0);
     const tiles = a.invite_code.split('').map((c, i) => `<span class="tile mag m${(i%6)+1}">${esc(c)}</span>`).join('');
     return `<section class="sec">
@@ -1514,7 +1548,7 @@ async function renderPerfil(){
       <button class="link" data-copy="${esc(a.invite_code)}">Copiar código</button>
       <ul class="list" style="margin-top:10px">
         ${fila(`Compañeros (${mem.length})`, mem.length ? mem.map((m, i) => `<span class="mini-m"><span class="mag-dot mag sm m${(i%6)+1}">${dotInner(m)}</span>${esc(m.name)}${m.id === S.api.uid ? ' (tú)' : ''}${a.owner_id && m.id === a.owner_id ? ' · admin' : ''}</span>`).join('') : 'Sin datos')}
-        ${fila('Compra', `${pend} ${pend === 1 ? 'pendiente' : 'pendientes'} · ${items.length - pend} ${items.length - pend === 1 ? 'comprado' : 'comprados'}`)}
+        ${fila('Compra', `${pend} ${pend === 1 ? 'pendiente' : 'pendientes'}${bajos ? ` (${bajos} ${bajos === 1 ? 'se acaba' : 'se acaban'})` : ''} · ${items.length - pend} ${items.length - pend === 1 ? 'comprado' : 'comprados'}`)}
         ${fila(`Limpieza (${zones.length} ${zones.length === 1 ? 'zona' : 'zonas'})`, zones.length ? zones.map(z => esc(z.name)).join(', ') : 'Sin zonas todavía')}
         ${fila(`Facturas (${bills.length})`, bills.length
           ? `${eur(total)} en total<br>` + bills.map(b => `${esc(b.name)}: ${eur(b.amount)} ${esc((FREQ[b.frequency] || '').toLowerCase())}, próximo ${esc(fmtDate(b.next_due_date))}`).join('<br>')
@@ -1963,6 +1997,32 @@ function quienCompro(i){
   const d = new Date(i.bought_at);
   return `${quien} · ${dayLabel(i.bought_at).toLowerCase()}, ${d.toLocaleTimeString('es-ES',{hour:'2-digit',minute:'2-digit'})}`;
 }
+// TEO-21: quién avisó de que se acaba y cuándo
+function quienAvisa(i){
+  const quien = !i.low_by ? 'Alguien avisó' : i.low_by === S.api.uid ? 'Avisaste tú' : `Avisó ${S.members.find(m => m.id === i.low_by)?.name || 'un antiguo compañero'}`;
+  return i.low_at ? `${quien} · ${dayLabel(i.low_at).toLowerCase()}` : quien;
+}
+// Productos de despensa que se ofrecen con un toque: lo que ya se ha comprado en este piso y, si faltan, los básicos
+const DESPENSA_BASE = ['Papel higiénico','Detergente','Aceite','Lavavajillas','Bolsas de basura','Sal','Café','Azúcar'];
+function despensaNombres(items){
+  const ya = new Set(items.filter(i => !i.is_bought && i.running_low).map(i => norm(i.name).trim()));
+  const vistos = new Set(), res = [];
+  const comprados = items.filter(i => i.is_bought).sort((a,b) => String(b.bought_at||'').localeCompare(String(a.bought_at||''))).map(i => i.name);
+  // un básico ("Aceite") se enlaza con el producto que el piso ya tenga ("Aceite de oliva") para no duplicarlo
+  const base = DESPENSA_BASE.map(n => { const k = norm(n).trim(); const ex = items.find(i => { const t = norm(i.name).trim(); return t.includes(k) || k.includes(t); }); return ex ? ex.name : n; });
+  for (const n of [...base, ...comprados]){
+    const k = norm(n).trim(); if (!k || vistos.has(k)) continue; vistos.add(k);
+    if (!ya.has(k)) res.push(n);
+  }
+  return res.slice(0, 8);
+}
+function despensaHtml(items){
+  const n = despensaNombres(items);
+  if (!n.length) return '';
+  return `<details class="despensa"${S.despAbierta ? ' open' : ''}><summary>⚠ ¿Se os acaba algo? <span class="small dim">Avisa con un toque</span></summary>
+    <p class="small dim">Toca un producto: sube arriba de la lista como prioritario hasta que se compre.</p>
+    <div class="chips">${n.map(x => `<button type="button" class="despchip" data-lowname="${esc(x)}">${esc(x)}</button>`).join('')}</div></details>`;
+}
 // De la compra al gasto: quien lo compró puede anotar lo que costó y se reparte entre todos
 function precioCompra(i){
   if (i.expense && !i.expense.deleted_at) return `<br><span class="small" style="font-weight:800">Gasto anotado: ${eur(i.expense.amount)}, repartido entre todos</span>`;
@@ -1975,13 +2035,15 @@ function precioCompra(i){
 }
 function filaCompra(i){
   if (S.editItem === i.id) return `
-    <li><form class="row grow" data-edit="${esc(i.id)}">
-      <input id="editName" maxlength="80" value="${esc(i.name)}" aria-label="Nuevo nombre de ${esc(i.name)}" required>
+    <li style="display:block"><form class="row grow" data-edit="${esc(i.id)}" style="flex-wrap:wrap">
+      <input id="editName" style="flex:1 1 100%" maxlength="80" value="${esc(i.name)}" aria-label="Nuevo nombre de ${esc(i.name)}" required>
       <button class="btn small" type="submit">Guardar</button>
-      <button class="btn ghost small" type="button" id="cancelEdit">Cancelar</button></form></li>`;
+      <button class="btn ghost small" type="button" id="cancelEdit">Cancelar</button></form>
+      ${i.is_bought ? '' : `<button class="lowbtn" type="button" data-low="${esc(i.id)}" data-v="${i.running_low ? 0 : 1}">${i.running_low ? 'Ya no se acaba' : '⚠ Marcar como «se está acabando»'}</button>`}</li>`;
   return `
-    <li data-busca="${esc(norm(i.name + ' ' + (i.is_bought ? quienCompro(i) : '')))}"><button class="check" aria-pressed="${i.is_bought}" data-b="${esc(i.id)}" aria-label="${i.is_bought?'Marcar como pendiente':'Marcar como comprado'}: ${esc(i.name)}">${CHECK}</button>
+    <li${!i.is_bought && i.running_low ? ' class="low"' : ''} data-busca="${esc(norm(i.name + ' ' + (i.is_bought ? quienCompro(i) : (i.running_low ? 'se acaba' : ''))))}"><button class="check" aria-pressed="${i.is_bought}" data-b="${esc(i.id)}" aria-label="${i.is_bought?'Marcar como pendiente':'Marcar como comprado'}: ${esc(i.name)}">${CHECK}</button>
       ${i.is_bought ? `<span class="grow"><span class="name done">${esc(i.name)}</span><br><span class="small dim">${esc(quienCompro(i))}</span>${precioCompra(i)}</span>`
+        : i.running_low ? `<span class="grow"><span class="name">${esc(i.name)}</span><br><span class="chip baja">Se acaba</span><span class="small dim">${esc(quienAvisa(i))}</span><br><button type="button" class="lowbtn" data-low="${esc(i.id)}" data-v="0">Ya no se acaba</button></span>`
         : `<span class="grow name">${esc(i.name)}</span>`}
       <button class="x" data-e="${esc(i.id)}" aria-label="Editar ${esc(i.name)}">${PENCIL}</button>
       <button class="x" data-d="${esc(i.id)}" aria-label="Quitar ${esc(i.name)}">${CROSS}</button></li>`;
@@ -2005,11 +2067,12 @@ function filtrarCompra(){
 async function renderCompra(){
   const items = await S.api.items(S.apt.id);
   const pend = items.filter(i => !i.is_bought);
+  const bajos = pend.filter(i => i.running_low).sort((a,b) => String(b.low_at||'').localeCompare(String(a.low_at||'')));
   const comprados = items.filter(i => i.is_bought).sort((a,b) => String(b.bought_at||'').localeCompare(String(a.bought_at||'')));
 
   // agrupar los pendientes por día, del más reciente al más antiguo
   const dias = [];
-  for (const i of pend){
+  for (const i of pend.filter(x => !x.running_low)){
     const et = dayLabel(i.created_at);
     const g = dias.find(x => x.et === et);
     if (g) g.items.push(i); else dias.push({ et, items:[i] });
@@ -2027,6 +2090,9 @@ async function renderCompra(){
         <input id="itemName" maxlength="80" placeholder="Añadir producto: leche, pan…" aria-label="Producto" required>
         <button class="btn" type="submit">Añadir</button>
       </form>
+      ${bajos.length ? `<div class="day low">⚠ Se está acabando <span class="n">${bajos.length}</span></div>
+        <ul class="list">${bajos.map(filaCompra).join('')}</ul>` : ''}
+      ${despensaHtml(items)}
       ${pend.length ? dias.map(d => bloque(d.et, d.items)).join('')
         : '<p class="empty">Nada pendiente. La nevera está a salvo.</p>'}
       </div>
@@ -2040,14 +2106,30 @@ async function renderCompra(){
   const qc = $('#qCompra');
   if (qc){ const f = () => { S.qCompra = qc.value; filtrarCompra(); }; qc.addEventListener('input', f); filtrarCompra(); }
 
+  const dsp = app.querySelector('details.despensa'); if (dsp) dsp.addEventListener('toggle', () => { S.despAbierta = dsp.open; });
   $('#fItem').onsubmit = e => run(e, async () => { await S.api.addItem(S.apt.id, $('#itemName').value.trim()); await renderCompra(); });
   // si tenía su gasto anotado, al destacharlo o quitarlo se elimina ese gasto (nadie sigue debiendo por él)
   const conGasto = idi => { const it = items.find(x => x.id === idi); return it && it.expense && !it.expense.deleted_at ? it : null; };
   app.querySelectorAll('[data-b]').forEach(b => b.onclick = async () => {
     if (b.disabled) return; b.disabled = true;
     const it = b.getAttribute('aria-pressed') === 'true' ? conGasto(b.dataset.b) : null;
+    const baja = b.getAttribute('aria-pressed') !== 'true' ? items.find(x => x.id === b.dataset.b && x.running_low) : null;
     try{ await S.api.setBought(b.dataset.b, b.getAttribute('aria-pressed') !== 'true');
-      if (it) toast(`También se ha eliminado su gasto de ${eur(it.expense.amount)}: ya no se debe.`); }catch(err){ toast(friendly(err)); }
+      if (it) toast(`También se ha eliminado su gasto de ${eur(it.expense.amount)}: ya no se debe.`);
+      else if (baja) toast(`Repuesto: «${baja.name}» ya no está marcado como que se acaba.`); }catch(err){ toast(friendly(err)); }
+    await renderCompra();
+  });
+  // TEO-21: avisar de que se acaba / quitar el aviso
+  app.querySelectorAll('[data-low]').forEach(b => b.onclick = async () => {
+    if (b.disabled) return; b.disabled = true;
+    const it = items.find(x => x.id === b.dataset.low), v = b.dataset.v === '1';
+    try{ await S.api.setLow(b.dataset.low, v);
+      toast(v ? `«${it?.name || 'Producto'}» se está acabando: sube arriba como prioritario.` : `«${it?.name || 'Producto'}» ya no se marca como que se acaba.`); }catch(err){ toast(friendly(err)); }
+    S.editItem = null; await renderCompra();
+  });
+  app.querySelectorAll('[data-lowname]').forEach(b => b.onclick = async () => {
+    if (b.disabled) return; b.disabled = true;
+    try{ await S.api.reportLow(S.apt.id, b.dataset.lowname); toast(`«${b.dataset.lowname}» se está acabando: sube arriba como prioritario.`); }catch(err){ toast(friendly(err)); }
     await renderCompra();
   });
   app.querySelectorAll('[data-d]').forEach(b => b.onclick = async () => {
@@ -2193,7 +2275,7 @@ async function renderLimpieza(){
 /* Cómo funciona la app */
 const PASOS = [
   ['1','Crea tu piso o únete','Quien monta el piso recibe un código de 6 letras. Los demás lo escriben una vez y ya están dentro. Todos veis lo mismo al instante.'],
-  ['2','Apuntad la compra','Cualquiera añade lo que falta en casa. Quien va al súper lo va tachando, y al lado queda su nombre para que se sepa quién ha ido.'],
+  ['2','Apuntad la compra','Cualquiera añade lo que falta en casa. Quien va al súper lo va tachando, y al lado queda su nombre para que se sepa quién ha ido. Si algo de la despensa se está acabando (papel, detergente, aceite…), márcalo con ⚠: sube arriba como prioritario y el aviso desaparece solo cuando alguien lo tacha como comprado.'],
   ['3','Repartid la limpieza','Definís las zonas una vez y la app reparte los turnos cada semana, rotando para que no le toque siempre lo mismo a la misma persona. Cada uno marca su tarea cuando la hace. Al abrir la app, una tarjeta te recuerda tu turno y el plazo, y en Limpieza tienes el histórico de quién ha cumplido.'],
   ['4','Llevad las cuentas','Si alguien adelanta algo (una cena, la compra), lo anota en Gastos: quién pagó, cuánto y quién participa, y se reparte a partes iguales. Para las facturas, dad de alta la luz, el agua o el internet con su importe y cada cuánto se repiten. La app os avisa de los vencimientos y, el día que vence, crea sola el gasto repartido entre los del piso. Cada uno marca cuando ha pagado su parte.'],
   ['5','Poned las normas del piso','En el Tablón, apartado Normas, apuntáis lo que acordáis entre todos: horarios de silencio, visitas, cocina… Cualquiera puede añadir, editar o eliminar una norma, y todo queda anotado en la actividad.'],
