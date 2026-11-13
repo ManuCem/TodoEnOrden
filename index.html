@@ -358,6 +358,30 @@ li.paused>.grow,li.paused>.right{opacity:.55}
   max-width:min(440px,calc(100vw - 32px));background:var(--ink);color:var(--paper);padding:12px 16px;border-radius:12px;font-size:15px;font-weight:700}
 .loading{display:grid;place-items:center;min-height:50vh;color:var(--muted)}
 .confirm{border:2px solid var(--bad);border-radius:12px;padding:12px;margin-top:10px;background:var(--paper)}
+
+/* ===== Portada: lo primero que ve alguien sin piso ===== */
+.lead{margin:14px 0 0;font-size:17px;line-height:1.5;max-width:40ch}
+.lead b{color:var(--accent);font-weight:800}
+.hero-tiles{justify-content:flex-start;margin:22px 0 4px}
+.hero-tiles .tile{max-width:50px;font-size:26px}
+.cta{margin-top:20px}
+.btn.big{min-height:54px;font-size:17px;width:100%;display:inline-flex;align-items:center;justify-content:center;gap:10px}
+.trust{display:flex;flex-wrap:wrap;gap:6px 16px;margin:14px 0 0;padding:0;list-style:none;font-size:14px;font-weight:700;color:var(--muted)}
+.trust li::before{content:"✓";margin-right:6px;color:var(--ok);font-weight:900}
+.pv-tabs{padding-top:4px}
+.pv{border:1.5px dashed var(--line);border-radius:12px;padding:2px 12px 12px;margin-top:10px;min-height:292px}
+.pv .check.on{background:var(--ok);border-color:var(--ok);color:#fff}
+.pv .check{color:transparent}
+.pv-cap{margin:12px 0 0;font-size:14px;font-weight:700;color:var(--muted)}
+.feat .mag-dot{font-size:20px}
+.ya-cuenta{display:flex;align-items:center;justify-content:center;gap:6px;flex-wrap:wrap;margin-top:6px;font-size:15px;color:var(--muted)}
+.ya-cuenta .link{display:inline-flex;align-items:center;gap:6px}
+.volver{margin:-4px 0 0}
+/* barra de la demo: recuerda que son datos de ejemplo y lleva a crear tu piso */
+.demo-cta{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:14px 0 0;padding:10px 10px 10px 14px;
+  border:1.5px solid var(--m2);border-radius:12px;background:var(--alert-bg);color:var(--alert-ink);font-size:14px;font-weight:600;box-shadow:var(--shadow)}
+.demo-cta b{font-weight:900}
+.demo-cta .btn{flex:none;background:var(--alert-ink);border-color:var(--alert-ink);color:var(--alert-bg)}
 /* ================= Animaciones ================= */
 :root{--spring:cubic-bezier(.34,1.56,.64,1);--out:cubic-bezier(.22,1,.36,1)}
 @keyframes rise{from{opacity:0;transform:translateY(18px) scale(.985)}}
@@ -1223,7 +1247,8 @@ function header(title){
       <div class="who"><b>${esc(nombreVisible())}</b>${S.email ? `<small>${esc(S.email)}</small>` : ''}</div>
       <button data-go="perfil">👤 Mi perfil</button>
       <button data-logout>↩ Cerrar sesión</button></div>` : ''}</div>
-    <h1>${esc(title)}</h1>${pisos}${avisoCuentaHtml()}${bannerHtml()}</header>`;
+    <h1>${esc(title)}</h1>${pisos}${demo ? `<div class="demo-cta" role="note"><span><b>Estás en la demo.</b> Los datos son de ejemplo y no se guardan.</span>
+      <button class="btn small" data-salir-demo>Crear mi piso</button></div>` : ''}${avisoCuentaHtml()}${bannerHtml()}</header>`;
 }
 // Cuenta anónima dentro de un piso: si cambia de móvil o borra el navegador, sería otra persona. Se le pide guardarla con Google.
 function avisoCuentaHtml(){
@@ -1277,6 +1302,12 @@ app.addEventListener('click', async e => {
   const p = e.target.closest('[data-piso]');
   if (p){ if (p.dataset.piso === S.api.piso) return; S.api = demoApi(p.dataset.piso); S.editItem = null; await start(); window.scrollTo(0,0); return; }
   if (e.target.closest('[data-google]')){ googleLogin(); return; }
+  if (e.target.closest('[data-salir-demo]')){
+    // De la demo a la app real, directamente al formulario de crear o unirse (sin volver a la portada)
+    S.empezar = true; S.tab = 'facturas'; S.apt = null; S.members = []; S.bills = [];
+    if (new URLSearchParams(location.search).has('demo')) history.replaceState(null, '', location.pathname);
+    await boot(false); window.scrollTo(0,0); return;
+  }
   if (e.target.closest('[data-cuenta-luego]')){ S.avisoCuentaOff = true; render(); return; }
   const acc = e.target.closest('[data-account]');
   if (acc){ const m = $('#userMenu'); m.hidden = !m.hidden; acc.setAttribute('aria-expanded', String(!m.hidden)); return; }
@@ -1602,6 +1633,108 @@ async function renderPerfil(){
   });
 }
 
+/* ---------- Portada: quien llega sin piso ve primero qué es la app, la prueba con la demo y luego entra ---------- */
+const debeVerPortada = () => S.api.kind === 'supabase' && S.anon && !S.empezar && !S.codigoInvitacion;
+const PREVIEW = {
+  gastos: ['Gastos', 'Quién ha pagado qué y cuánto debe cada uno, sin calculadora.', `
+    <ul class="list">
+      <li><span class="mag-dot mag m1">M</span><span class="grow"><span class="name">Cena del viernes</span><br><span class="small dim">Pagó Marta · entre 3</span></span>
+        <span class="right"><span class="amount">${eur(36)}</span><span class="small dim">${eur(12)} cada uno</span></span></li>
+      <li><span class="mag-dot mag m3">S</span><span class="grow"><span class="name">Compra del súper</span><br><span class="small dim">Pagó Sara · entre 3</span></span>
+        <span class="right"><span class="amount">${eur(54.9)}</span><span class="small dim">${eur(18.3)} cada uno</span></span></li>
+      <li><span class="mag-dot mag m2">L</span><span class="grow"><span class="name">Leo te debe</span><br><span class="small dim">Se salda con un toque cuando te pague</span></span>
+        <span class="right"><span class="amount" style="color:var(--ok)">+${eur(12.5)}</span></span></li>
+    </ul>`],
+  compra: ['Compra', 'Una lista para todo el piso. Lo que se acaba sube arriba.', `
+    <ul class="list">
+      <li><span class="check" aria-hidden="true">${CHECK}</span><span class="grow"><span class="name">Papel higiénico</span><br>
+        <span class="chip" style="background:var(--alert-bg);color:var(--alert-ink)">⚠ Se está acabando</span></span></li>
+      <li><span class="check" aria-hidden="true">${CHECK}</span><span class="grow"><span class="name">Leche</span><br><span class="small dim">Lo apuntó Leo</span></span></li>
+      <li><span class="check on" aria-hidden="true">${CHECK}</span><span class="grow"><span class="name done">Pan</span><br><span class="small dim">Lo compró Sara</span></span></li>
+      <li><span class="check on" aria-hidden="true">${CHECK}</span><span class="grow"><span class="name done">Huevos</span><br><span class="small dim">Lo compró Marta</span></span></li>
+    </ul>`],
+  limpieza: ['Limpieza', 'Turnos que rotan solos cada semana. Cada uno marca lo suyo.', `
+    <div class="turno"><div class="turno-top"><b>Tu turno: Baño</b><span class="badge">Quedan 3 días</span></div>
+      <p>Esta semana te toca a ti. Márcalo cuando lo hagas.</p></div>
+    <ul class="list" style="margin-top:6px">
+      <li><span class="mag-dot mag m2">L</span><span class="grow"><span class="name">Cocina</span><br><span class="small dim">Leo</span></span><span class="state ok">Hecha</span></li>
+      <li><span class="mag-dot mag m3">S</span><span class="grow"><span class="name">Salón</span><br><span class="small dim">Sara</span></span><span class="state">Pendiente</span></li>
+    </ul>`],
+  facturas: ['Facturas', 'Luz, agua, internet… con aviso antes de que venzan.', `
+    <ul class="list receipt">
+      <li class="urgent"><span class="grow"><span class="name">Luz</span><br><span class="small dim">Mensual · la adelanta Leo</span></span>
+        <span class="right"><span class="amount">${eur(72.4)}</span><span class="due soon">vence mañana</span></span></li>
+      <li><span class="grow"><span class="name">Internet</span><br><span class="small dim">Mensual · la adelanta Marta</span></span>
+        <span class="right"><span class="amount">${eur(39.9)}</span><span class="due">vence en 16 días</span></span></li>
+      <li><span class="grow"><span class="name">Agua</span><br><span class="small dim">Trimestral · la adelanta Sara</span></span>
+        <span class="right"><span class="amount">${eur(28.15)}</span><span class="state ok">Pagada</span></span></li>
+    </ul>`]
+};
+const FUNCIONES = [
+  ['m2','€','Gastos compartidos','Apunta quién pagó la cena o la compra y la app reparte a partes iguales. Siempre sabes quién debe a quién.'],
+  ['m3','🛒','Lista de la compra común','Cualquiera añade lo que falta y quien va al súper lo tacha. Lo que se acaba se marca como prioritario.'],
+  ['m6','🧽','Turnos de limpieza','Definís las zonas una vez y los turnos rotan solos cada semana. Con histórico de quién ha cumplido.'],
+  ['m1','📄','Facturas sin sustos','La luz, el agua o el internet con su fecha. Te avisa antes de que venzan y reparte el importe.'],
+  ['m5','📌','Tablón del piso','Normas acordadas y avisos para todos: visitas, cortes de agua, exámenes…'],
+  ['m4','⚡','En directo','Si alguien tacha algo o anota un gasto, lo ves al momento en tu móvil.']
+];
+function renderPortada(){
+  delete document.body.dataset.tab;
+  $('#nav').hidden = true;
+  const pv = S.pv && PREVIEW[S.pv] ? S.pv : 'gastos';
+  const tiles = 'ORDEN'.split('').map((c,i) => `<span class="tile mag m${i+1}">${c}</span>`).join('');
+  const botonesInicio = `
+    <button class="btn big" data-demo>Probar la demo</button>
+    <button class="btn big ghost" data-empezar>Crear mi piso gratis</button>`;
+  app.innerHTML = `
+    <header class="top"><div class="meta">${LOGO_IMG}
+      <button class="status" data-google aria-label="Iniciar sesión con Google" style="font-weight:800;white-space:nowrap;flex:none">${GOOGLE_G}Entrar</button></div>
+      <h1>Tu piso, en orden</h1>
+      <p class="lead">La compra, la limpieza, las facturas y <b>quién debe qué</b>. Todo el piso compartido en una sola app, sin perseguir a nadie por el grupo.</p>
+      <div class="tiles hero-tiles" role="img" aria-label="ORDEN">${tiles}</div>
+      <div class="stack cta">${botonesInicio}</div>
+      <ul class="trust"><li>Gratis</li><li>Sin instalar nada</li><li>Sin discusiones</li></ul>
+    </header>
+    <section class="sec">
+      <div class="sec-head"><h2>Échale un vistazo</h2><span class="count">Ejemplo</span></div>
+      <p class="sub">Así se ve un piso de verdad. Toca cada apartado.</p>
+      <div class="pisos pv-tabs" role="group" aria-label="Apartados de la app">${Object.entries(PREVIEW).map(([k,[t]]) =>
+        `<button data-pv="${k}" aria-pressed="${k===pv}">${t}</button>`).join('')}</div>
+      <p class="pv-cap" id="pvCap">${PREVIEW[pv][1]}</p>
+      <div class="pv" id="pv">${PREVIEW[pv][2]}</div>
+      <button class="btn big" data-demo style="margin-top:14px">Abrir la demo completa</button>
+    </section>
+    <section class="sec feat">
+      <h2>Todo lo del piso, en un sitio</h2>
+      <p class="sub">Se acabaron las notas en la nevera, las cuentas en una servilleta y los «¿a quién le toca el baño?».</p>
+      <ul class="list">${FUNCIONES.map(([m,ic,t,d]) => `
+        <li><span class="mag-dot mag ${m}" aria-hidden="true">${ic}</span>
+          <span class="grow"><span class="name">${t}</span><br><span class="small dim">${d}</span></span></li>`).join('')}</ul>
+    </section>
+    <section class="sec">
+      <h2>Empieza en un minuto</h2>
+      <ul class="list">
+        <li><span class="mag-dot mag m1">1</span><span class="grow"><span class="name">Crea tu piso</span><br><span class="small dim">Ponle nombre y recibes un código de 6 letras.</span></span></li>
+        <li><span class="mag-dot mag m2">2</span><span class="grow"><span class="name">Invita a tus compañeros</span><br><span class="small dim">Pásales el código o el enlace. Lo abren en el navegador y ya están dentro.</span></span></li>
+        <li><span class="mag-dot mag m3">3</span><span class="grow"><span class="name">Listo</span><br><span class="small dim">Todos veis lo mismo al instante: compra, turnos, facturas y gastos.</span></span></li>
+      </ul>
+    </section>
+    <section class="sec">
+      <h2>¿Ordenamos tu piso?</h2>
+      <p class="sub">Pruébalo con un piso de ejemplo o crea el tuyo ahora. Nadie de fuera del piso puede ver vuestros datos.</p>
+      <div class="stack">${botonesInicio}</div>
+      <p class="ya-cuenta">¿Ya tienes cuenta? <button class="link" data-google>${GOOGLE_G}Entra con Google</button></p>
+    </section>`;
+  app.querySelectorAll('[data-demo]').forEach(b => b.onclick = () => { S.tab = 'facturas'; boot(true); window.scrollTo(0,0); });
+  app.querySelectorAll('[data-empezar]').forEach(b => b.onclick = () => { S.empezar = true; ultimaVista = null; renderOnboarding(); window.scrollTo(0,0); });
+  app.querySelectorAll('[data-pv]').forEach(b => b.onclick = () => {
+    S.pv = b.dataset.pv;
+    app.querySelectorAll('[data-pv]').forEach(x => x.setAttribute('aria-pressed', String(x === b)));
+    $('#pvCap').textContent = PREVIEW[S.pv][1];
+    $('#pv').innerHTML = PREVIEW[S.pv][2];
+  });
+}
+
 /* Sin piso: nombre + crear o unirse (TEO-8) */
 function renderInvitacion(){
   const cod = S.codigoInvitacion;
@@ -1624,7 +1757,9 @@ function renderInvitacion(){
 }
 function renderOnboarding(){
   if (S.codigoInvitacion && S.me) return renderInvitacion();
-  app.innerHTML = `${header('Tu piso, en orden')}
+  if (debeVerPortada()) return renderPortada();
+  app.innerHTML = `${header('Crea o únete a tu piso')}
+    ${S.api.kind === 'supabase' && S.anon && !S.codigoInvitacion ? '<p class="volver"><button class="link" data-portada>← Volver a la portada</button></p>' : ''}
     ${S.codigoInvitacion ? `<div class="notice"><b>Te han invitado a un piso.</b> ${S.me ? 'Pulsa «Unirme al piso» para entrar.' : 'Escribe tu nombre y pulsa «Unirme al piso».'}</div>` : ''}
     <section class="sec">
       <h2>¿Cómo te llamas?</h2>
@@ -1647,6 +1782,8 @@ function renderOnboarding(){
         <button class="btn ghost" type="submit">Unirme al piso</button>
       </form>
     </section>`;
+  const vp = $('[data-portada]');
+  if (vp) vp.onclick = () => { S.empezar = false; ultimaVista = null; renderPortada(); window.scrollTo(0,0); };
   const ensureName = async () => {
     if (!$('#myName')) return true;
     const n = $('#myName').value.trim();
