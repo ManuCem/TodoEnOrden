@@ -201,6 +201,9 @@ form.precio input{width:110px;flex:0 0 110px}
 .part-row label{display:flex;align-items:center;gap:10px;font-weight:600;margin:0}
 .part-row input[type=checkbox]{width:22px;height:22px;min-height:0}
 .part-val{width:96px!important;flex:0 0 96px;text-align:right}
+/* TEO-30: en «a partes iguales» cada participante ve su parte al momento */
+.part-cuota{flex:none;font-weight:800;font-variant-numeric:tabular-nums;color:var(--ink);transition:opacity .2s}
+.part-cuota.fuera{color:var(--muted);font-weight:600}
 .list li.aviso{display:block;border-left:5px solid var(--accent);padding-left:12px}
 .aviso .hasta{display:inline-block;margin-top:4px;font-size:13px;font-weight:800;color:var(--accent)}
 .norma .desc{margin:4px 0 0;white-space:pre-wrap;overflow-wrap:anywhere}
@@ -2276,6 +2279,11 @@ function saldosHtml(bal){
 }
 
 const TIPO_REPARTO = {equal:'A partes iguales', exact:'Por importes', percentage:'Por porcentajes'};
+// Parte de cada uno al céntimo: 10 € entre 3 → 3,34 · 3,33 · 3,33 (la suma da siempre el total)
+function repartoIgual(total, n){
+  const c = Math.round(total * 100), base = Math.floor(c / n), resto = c - base * n;
+  return Array.from({length:n}, (_, i) => (base + (i < resto ? 1 : 0)) / 100);
+}
 function formGastoHtml(){
   // S.gastoEdit: el gasto que se está editando (mismo formulario, ya relleno)
   const yo = S.api.uid, hoy = iso(new Date()), ed = S.gastoEdit;
@@ -2300,7 +2308,8 @@ function formGastoHtml(){
       <fieldset id="gPart" class="parts">
         <legend>¿Quién participa?</legend>
         ${S.members.map(m => `<div class="part-row"><label><input type="checkbox" value="${esc(m.id)}" ${!ed || parte(m.id) ? 'checked' : ''}> ${esc(m.id === yo ? m.name + ' (tú)' : m.name)}</label>
-          <input class="part-val" type="number" inputmode="decimal" min="0" step="0.01" data-u="${esc(m.id)}" aria-label="${tipo === 'percentage' ? 'Porcentaje' : 'Importe'} de ${esc(m.name)}" placeholder="${tipo === 'percentage' ? '%' : '€'}" value="${esc(valor(m.id))}" ${tipo === 'equal' ? 'hidden' : ''}></div>`).join('')}
+          <input class="part-val" type="number" inputmode="decimal" min="0" step="0.01" data-u="${esc(m.id)}" aria-label="${tipo === 'percentage' ? 'Porcentaje' : 'Importe'} de ${esc(m.name)}" placeholder="${tipo === 'percentage' ? '%' : '€'}" value="${esc(valor(m.id))}" ${tipo === 'equal' ? 'hidden' : ''}>
+          <span class="part-cuota" ${tipo === 'equal' ? '' : 'hidden'}></span></div>`).join('')}
         <small class="err" id="ePart" role="alert" hidden></small>
       </fieldset>
       <p class="small dim" id="gPreview" style="margin:0" aria-live="polite"></p>
@@ -2515,12 +2524,24 @@ function bindFormGasto(){
   const add = $('#gAdd'); if (add) add.onclick = async () => { S.gastoForm = true; S.gastoEdit = null; S.gastoTipo = null; S.movDel = null; await renderFacturas(); $('#gImporte')?.focus(); };
   const f = $('#fGasto'); if (!f) return;
   const tipo = () => f.querySelector('input[name=gTipo]:checked').value;
-  const filas = () => [...f.querySelectorAll('.part-row')].map(r => ({u:r.querySelector('input[type=checkbox]').value, on:r.querySelector('input[type=checkbox]').checked, val:r.querySelector('.part-val')}));
+  const filas = () => [...f.querySelectorAll('.part-row')].map(r => ({u:r.querySelector('input[type=checkbox]').value, on:r.querySelector('input[type=checkbox]').checked, val:r.querySelector('.part-val'), cuota:r.querySelector('.part-cuota')}));
   const preview = () => {
     const a = Math.round(parseFloat($('#gImporte').value) * 100) / 100, on = filas().filter(x => x.on), t = tipo();
-    filas().forEach(x => { x.val.hidden = t === 'equal' || !x.on; x.val.placeholder = t === 'percentage' ? '%' : '€'; });
+    filas().forEach(x => { x.val.hidden = t === 'equal' || !x.on; x.val.placeholder = t === 'percentage' ? '%' : '€'; x.cuota.hidden = t !== 'equal'; });
     let txt = '';
-    if (t === 'equal') txt = a > 0 && on.length ? `${on.length === 1 ? 'Una persona' : on.length + ' personas'}: ${eur(Math.floor(a*100/on.length)/100)}${Math.round(a*100) % on.length ? ' aprox.' : ''} cada una.` : '';
+    if (t === 'equal'){
+      // TEO-30: reparto a partes iguales al céntimo, igual que la base de datos (los céntimos que sobran, a los primeros)
+      const partes = a > 0 && on.length ? repartoIgual(a, on.length) : [];
+      const orden = on.map(o => o.u);
+      filas().forEach(x => { const k = orden.indexOf(x.u);
+        x.cuota.textContent = k >= 0 ? (partes.length ? eur(partes[k]) : '—') : 'no participa'; x.cuota.classList.toggle('fuera', k < 0); });
+      if (!on.length) txt = 'Marca al menos a una persona.';
+      else if (partes.length){ const extra = partes.filter(v => v > partes[partes.length - 1]).length;
+        const quien = orden.slice(0, extra).map(u => (S.members.find(m => m.id === u) || {}).name || 'alguien');
+        const lista = quien.length > 1 ? quien.slice(0, -1).join(', ') + ' y ' + quien[quien.length - 1] : quien[0];
+        txt = `${eur(a)} entre ${on.length === 1 ? '1 persona' : on.length + ' personas'}: ${eur(partes[partes.length - 1])} cada una` +
+          (extra ? ` (+1 céntimo a ${lista} para que sume justo ${eur(a)}).` : '.'); }
+    }
     else {
       const sum = on.reduce((s, x) => s + (parseFloat(x.val.value) || 0), 0);
       if (t === 'exact') txt = a > 0 ? (Math.abs(sum - a) < 0.005 ? `Cuadra: ${eur(sum)} de ${eur(a)}.` : sum < a ? `Faltan ${eur(a - sum)} por repartir.` : `Te pasas en ${eur(sum - a)}.`) : `Repartido: ${eur(sum)}.`;
