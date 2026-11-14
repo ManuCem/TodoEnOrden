@@ -383,9 +383,7 @@ li.paused>.grow,li.paused>.right{opacity:.55}
 .demo-cta b{font-weight:900}
 .demo-cta{flex-wrap:wrap}
 .demo-cta>span:first-child{flex:1 1 200px}
-.demo-btns{display:flex;gap:8px;flex-wrap:wrap}
 .demo-cta .btn{flex:none;background:var(--alert-ink);border-color:var(--alert-ink);color:var(--alert-bg)}
-.demo-cta .btn.ghost{background:transparent;color:var(--alert-ink)}
 /* ================= Animaciones ================= */
 :root{--spring:cubic-bezier(.34,1.56,.64,1);--out:cubic-bezier(.22,1,.36,1)}
 @keyframes rise{from{opacity:0;transform:translateY(18px) scale(.985)}}
@@ -1187,8 +1185,28 @@ async function boot(forceDemo){
     S.api = remoteApi(sb, session.user.id);
     await limite(S.api.myName(), 9000, 'La base de datos no responde desde aquí.');
     await start();
-  }catch(e){ showConnectionError(e); }
+  }catch(e){
+    // Sesión guardada que ya no vale (usuario borrado, token caducado sin renovar…): se borra y se vuelve a
+    // intentar una vez, para no tener que borrar los datos del navegador a mano.
+    if (!S.reparado && SB && sesionRota(e)){
+      S.reparado = true; console.warn('Sesión guardada no válida, se borra:', e);
+      await SB.auth.signOut({ scope:'local' }).catch(() => {});
+      borrarDatosApp();
+      return boot(false);
+    }
+    showConnectionError(e);
+  }
   finally{ clearTimeout(vigia); }
+}
+function sesionRota(e){
+  const t = [e && e.message, e && e.code, e && e.error_description].filter(Boolean).join(' ');
+  return /jwt|sub claim|refresh.?token|session.?not.?found|user.?not.?found|invalid claim|PGRST30[0-3]/i.test(t);
+}
+// Lo mismo que «borrar datos del sitio» en el navegador, pero solo lo de esta app: la sesión y los avisos pendientes.
+function borrarDatosApp(){
+  try{ Object.keys(localStorage).filter(k => /^(sb-|teo_)/.test(k)).forEach(k => localStorage.removeItem(k)); }catch{}
+  try{ sessionStorage.clear(); }catch{}
+  Object.keys(memStore).forEach(k => delete memStore[k]);
 }
 
 function showConnectionError(e){
@@ -1205,9 +1223,18 @@ function showConnectionError(e){
     <div class="stack">
       <button class="btn" id="retry">Reintentar</button>
       <button class="btn ghost" id="demo">Ver con datos de ejemplo (sin base de datos)</button>
+      <button class="link" id="reset" style="justify-self:center">¿Sigue sin funcionar? Empezar de cero en este navegador</button>
+    </div>
+    <div class="confirm" id="resetConfirm" hidden>
+      <p style="margin:0 0 10px;font-size:15px">Se borra la sesión guardada de TodoenOrden en este navegador, como si borraras sus datos en los ajustes.
+        <b>Tus pisos y tus datos no se borran.</b> Si entrabas con Google, vuelve a pulsar «Entrar» y lo recuperas todo. Si no habías entrado con Google, tendrás que unirte otra vez con el código del piso y aparecerás como una persona nueva.</p>
+      <div class="row"><button class="btn danger small" id="resetYes">Sí, empezar de cero</button><button class="btn ghost small" id="resetNo">Cancelar</button></div>
     </div>`;
-  $('#retry').onclick = () => boot(false);
+  $('#retry').onclick = () => { S.reparado = false; boot(false); };
   $('#demo').onclick = () => boot(true);
+  $('#reset').onclick = () => { $('#resetConfirm').hidden = false; $('#resetYes').focus(); };
+  $('#resetNo').onclick = () => { $('#resetConfirm').hidden = true; };
+  $('#resetYes').onclick = () => { borrarDatosApp(); location.replace(location.pathname); };
 }
 
 async function start(){
@@ -1268,8 +1295,8 @@ function header(title){
       <div class="who"><b>${esc(nombreVisible())}</b>${S.email ? `<small>${esc(S.email)}</small>` : ''}</div>
       <button data-go="perfil">👤 Mi perfil</button>
       <button data-logout>↩ Cerrar sesión</button></div>` : ''}</div>
-    <h1>${esc(title)}</h1>${pisos}${demo ? `<div class="demo-cta" role="note"><span><b>Estás en la demo.</b> Los datos son de ejemplo y no se guardan.</span>
-      <span class="demo-btns"><button class="btn small ghost" data-inicio>← Volver al inicio</button><button class="btn small" data-salir-demo>Crear mi piso</button></span></div>` : ''}${avisoCuentaHtml()}${bannerHtml()}</header>`;
+    <h1>${esc(title)}</h1>${demo ? '<p class="volver" style="margin:10px 0 0"><button class="link" data-inicio>← Volver a la portada</button></p>' : ''}${pisos}${demo ? `<div class="demo-cta" role="note"><span><b>Estás en la demo.</b> Los datos son de ejemplo y no se guardan.</span>
+      <button class="btn small" data-salir-demo>Crear mi piso</button></div>` : ''}${avisoCuentaHtml()}${bannerHtml()}</header>`;
 }
 // Cuenta anónima dentro de un piso: si cambia de móvil o borra el navegador, sería otra persona. Se le pide guardarla con Google.
 function avisoCuentaHtml(){
