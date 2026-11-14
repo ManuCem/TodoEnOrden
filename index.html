@@ -1105,7 +1105,7 @@ function demoApi(clave){
 }
 
 /* ---------- estado y arranque ---------- */
-const S = { api:null, tab: ['piso','compra','limpieza','facturas','tablon'].includes(new URLSearchParams(location.search).get('tab')) ? new URLSearchParams(location.search).get('tab') : 'facturas', me:'', apt:null, members:[], busy:false, editItem:null, bills:[] };
+const S = { api:null, tab: ['piso','compra','limpieza','facturas','tablon'].includes(new URLSearchParams(location.search).get('tab')) ? new URLSearchParams(location.search).get('tab') : 'facturas', me:'', apt:null, pisos:[], agregando:false, members:[], busy:false, editItem:null, bills:[] };
 const app = $('#app');
 
 const memStore = {};
@@ -1261,7 +1261,11 @@ async function start(){
     safeStorage.removeItem('teo_codigo');
     if (!S.apt){
       S.codigoInvitacion = cod; // no te unimos sin preguntar: se muestra una confirmación
-    } else if (S.apt.invite_code !== cod) toast('Ya estás en un piso. Sal de él en Mi perfil para unirte a otro.');
+    } else {
+      const ya = S.pisos.find(a => String(a.invite_code).toUpperCase() === cod.toUpperCase());
+      if (ya){ if (ya.id !== S.apt.id){ elegirPiso(ya); S.members = await S.api.members(ya.id); } toast('Ya estás en ese piso.'); }
+      else { S.codigoInvitacion = cod; S.agregando = true; S.empezar = true; }   // otro piso más: se pide confirmación
+    }
   }
   render();
 }
@@ -1274,9 +1278,22 @@ async function autoExpenses(){
     return n;
   }catch(e){ console.warn('No se pudieron generar los gastos de las facturas:', e); return 0; }
 }
+// Puedes estar en varios pisos: se cargan todos y se abre el último que elegiste (o el primero).
 async function refreshApt(){
-  S.apt = await S.api.apartment();
+  let todos;
+  try{ todos = S.api.apartments ? await S.api.apartments() : null; }catch{ todos = null; }
+  if (!todos){ const a = await S.api.apartment(); todos = a ? [a] : []; }
+  S.pisos = todos;
+  const pref = safeStorage.getItem('teo_piso');
+  S.apt = todos.find(a => String(a.id) === pref) || todos[0] || null;
   S.members = S.apt ? await S.api.members(S.apt.id) : [];
+}
+function elegirPiso(a){ S.apt = a; S.agregando = false; safeStorage.setItem('teo_piso', String(a.id)); }
+// Tras crear o unirte a un piso, ese pasa a ser el piso abierto.
+async function seleccionarNuevo(antes, code){
+  const n = S.pisos.find(a => !antes.includes(String(a.id))) || (code && S.pisos.find(a => String(a.invite_code).toUpperCase() === code.toUpperCase()));
+  if (n){ elegirPiso(n); S.members = await S.api.members(n.id); }
+  S.agregando = false;
 }
 
 /* ---------- vistas ---------- */
@@ -1284,6 +1301,8 @@ function header(title){
   const demo = S.api.kind === 'demo';
   const pisos = demo ? `<div class="pisos-label">Pisos de ejemplo</div><div class="pisos">${
     Object.entries(PISOS).map(([k,p]) => `<button data-piso="${k}" aria-pressed="${S.api.piso===k}">${esc(p.nombre)}</button>`).join('')}</div>` : '';
+  const mios = S.api.kind === 'supabase' && !S.agregando && (S.pisos || []).length > 1
+    ? `<div class="pisos" role="group" aria-label="Mis pisos">${S.pisos.map(a => `<button data-switch="${esc(a.id)}" aria-pressed="${!!S.apt && String(S.apt.id) === String(a.id)}">${esc(a.name)}</button>`).join('')}<button data-add aria-label="Añadir otro piso">＋</button></div>` : '';
   return `<header class="top"><div class="meta"><button class="logo-btn" data-go="piso" aria-label="Ir al menú principal">${LOGO_IMG}</button>
     <span style="display:flex;gap:8px;align-items:center">
       <span class="status ${demo?'demo':''}" id="estado"><i></i><span class="st-txt">${demo?'Datos de ejemplo':S.directo?'En directo':'Conectado'}</span></span>
@@ -1295,7 +1314,7 @@ function header(title){
       <div class="who"><b>${esc(nombreVisible())}</b>${S.email ? `<small>${esc(S.email)}</small>` : ''}</div>
       <button data-go="perfil">👤 Mi perfil</button>
       <button data-logout>↩ Cerrar sesión</button></div>` : ''}</div>
-    <h1>${esc(title)}</h1>${demo ? '<p class="volver" style="margin:10px 0 0"><button class="link" data-inicio>← Volver a la portada</button></p>' : ''}${pisos}${demo ? `<div class="demo-cta" role="note"><span><b>Estás en la demo.</b> Los datos son de ejemplo y no se guardan.</span>
+    <h1>${esc(title)}</h1>${demo ? '<p class="volver" style="margin:10px 0 0"><button class="link" data-inicio>← Volver a la portada</button></p>' : ''}${pisos}${mios}${demo ? `<div class="demo-cta" role="note"><span><b>Estás en la demo.</b> Los datos son de ejemplo y no se guardan.</span>
       <button class="btn small" data-salir-demo>Crear mi piso</button></div>` : ''}${avisoCuentaHtml()}${bannerHtml()}</header>`;
 }
 // Cuenta anónima dentro de un piso: si cambia de móvil o borra el navegador, sería otra persona. Se le pide guardarla con Google.
@@ -1350,6 +1369,16 @@ app.addEventListener('click', async e => {
   const p = e.target.closest('[data-piso]');
   if (p){ if (p.dataset.piso === S.api.piso) return; S.api = demoApi(p.dataset.piso); S.editItem = null; await start(); window.scrollTo(0,0); return; }
   if (e.target.closest('[data-google]')){ googleLogin(); return; }
+  const sw = e.target.closest('[data-switch]');
+  if (sw){
+    const a = S.pisos.find(x => String(x.id) === sw.dataset.switch);
+    if (a && (!S.apt || a.id !== S.apt.id)){
+      elegirPiso(a); S.editItem = null; S.members = await S.api.members(a.id); await autoExpenses(); render(); window.scrollTo(0,0);
+    }
+    return;
+  }
+  if (e.target.closest('[data-add]')){ S.agregando = true; S.empezar = true; S.tab = 'piso'; render(); window.scrollTo(0,0); return; }
+  if (e.target.closest('[data-cancelar-add]')){ S.agregando = false; S.codigoInvitacion = ''; render(); window.scrollTo(0,0); return; }
   const salir = e.target.closest('[data-salir-demo],[data-inicio]');
   if (salir){
     // De la demo a la app real: «Crear mi piso» va directo al formulario; «Volver al inicio», a la portada
@@ -1461,7 +1490,7 @@ async function render(){
     document.body.dataset.tab = 'perfil';
     try{ return await renderPerfil(); }catch(e){ toast(friendly(e)); return; }
   }
-  if (!S.apt){ S.bills = []; $('#nav').hidden = true; return renderOnboarding(); }
+  if (!S.apt || S.agregando){ if (!S.apt) S.bills = []; $('#nav').hidden = true; return renderOnboarding(); }
   if (S.tab === 'normas' || S.tab === 'avisos'){ S.tablonSub = S.tab; S.tab = 'tablon'; }   // enlaces antiguos
   ultimaCarga = Date.now();
   $('#nav').hidden = false; renderNav();
@@ -1652,6 +1681,7 @@ async function renderPerfil(){
     ${S.editPerfil ? editorPerfilHtml() : ''}
     <div class="sec-head" style="margin:18px 2px 0"><h2>Mis pisos</h2><span class="count">${info.length}</span></div>
     ${info.length ? info.map(card).join('') : `<section class="sec"><p class="sub" style="margin:0">Todavía no estás en ningún piso.</p><button class="btn" data-go="piso" style="margin-top:12px">Crear o unirme a un piso</button></section>`}
+    ${info.length ? '<section class="sec"><button class="btn ghost" data-add style="width:100%">＋ Añadir otro piso</button></section>' : ''}
     <section class="sec">
       <h2>Eliminar mi cuenta</h2>
       <p class="sub">Se borra tu cuenta y saldrás de tus pisos.</p>
@@ -1680,7 +1710,7 @@ async function renderPerfil(){
   });
   app.querySelectorAll('[data-open]').forEach(b => b.onclick = async () => {
     const x = info.find(i => i.a.id === b.dataset.open); if (!x) return;
-    S.apt = x.a; S.members = x.mem; S.tab = 'facturas'; render(); window.scrollTo(0, 0);
+    elegirPiso(x.a); S.members = x.mem; S.tab = 'facturas'; render(); window.scrollTo(0, 0);
   });
 }
 
@@ -1800,23 +1830,26 @@ function renderInvitacion(){
         <button class="btn ghost" id="invNo">No, gracias</button>
       </div>
     </section>`;
-  $('#invNo').onclick = () => { S.codigoInvitacion = ''; renderOnboarding(); };
+  $('#invNo').onclick = () => { S.codigoInvitacion = ''; if (S.apt) S.agregando = false; render(); };
   $('#invYes').onclick = e => run(e, async () => {
+    const antes = S.pisos.map(a => String(a.id));
     await S.api.joinApartment(cod);
-    await refreshApt(); S.tab = 'facturas'; S.codigoInvitacion = ''; toast('Te has unido al piso.'); render();
+    await refreshApt(); await seleccionarNuevo(antes, cod);
+    S.tab = 'facturas'; S.codigoInvitacion = ''; toast('Te has unido al piso.'); render();
   });
 }
 function renderOnboarding(){
   if (S.codigoInvitacion && S.me) return renderInvitacion();
   if (debeVerPortada()) return renderPortada();
   app.innerHTML = `${header('Crea o únete a tu piso')}
-    ${S.api.kind === 'supabase' && S.anon && !S.codigoInvitacion ? '<p class="volver"><button class="link" data-portada>← Volver a la portada</button></p>' : ''}
+    ${S.agregando && S.apt ? '<p class="volver"><button class="link" data-cancelar-add>← Volver a mi piso</button></p>'
+      : S.api.kind === 'supabase' && S.anon && !S.codigoInvitacion ? '<p class="volver"><button class="link" data-portada>← Volver a la portada</button></p>' : ''}
     ${S.codigoInvitacion ? `<div class="notice"><b>Te han invitado a un piso.</b> ${S.me ? 'Pulsa «Unirme al piso» para entrar.' : 'Escribe tu nombre y pulsa «Unirme al piso».'}</div>` : ''}
-    <section class="sec">
+    ${S.agregando && S.me ? '' : `<section class="sec">
       <h2>¿Cómo te llamas?</h2>
       <p class="sub">Es el nombre que verán tus compañeros.${!S.anon && S.me ? ' Lo hemos rellenado con el de tu cuenta de Google; cámbialo si quieres.' : ''}</p>
       <label>Tu nombre<input id="myName" maxlength="40" autocomplete="given-name" value="${esc(S.me)}" placeholder="Marta"></label>
-    </section>
+    </section>`}
     <section class="sec">
       <h2>Crear un piso</h2>
       <p class="sub">Recibes un código de 6 letras para invitar a tus compañeros.</p>
@@ -1844,13 +1877,17 @@ function renderOnboarding(){
   };
   $('#fCreate').onsubmit = e => run(e, async () => {
     if (!(await ensureName())) return;
+    const antes = S.pisos.map(a => String(a.id));
     await S.api.createApartment($('#aptName').value.trim());
-    await refreshApt(); S.tab='piso'; toast('Piso creado. Comparte el código con tus compañeros.'); render();
+    await refreshApt(); await seleccionarNuevo(antes);
+    S.tab='piso'; toast('Piso creado. Comparte el código con tus compañeros.'); render();
   });
   $('#fJoin').onsubmit = e => run(e, async () => {
     if (!(await ensureName())) return;
-    await S.api.joinApartment($('#code').value.trim());
-    await refreshApt(); S.tab='piso'; toast('Te has unido al piso.'); render();
+    const antes = S.pisos.map(a => String(a.id)), code = $('#code').value.trim();
+    await S.api.joinApartment(code);
+    await refreshApt(); await seleccionarNuevo(antes, code);
+    S.tab='piso'; toast('Te has unido al piso.'); render();
   });
 }
 
