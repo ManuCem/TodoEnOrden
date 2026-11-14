@@ -1305,7 +1305,7 @@ function header(title){
     ? `<div class="pisos" role="group" aria-label="Mis pisos">${S.pisos.map(a => `<button data-switch="${esc(a.id)}" aria-pressed="${!!S.apt && String(S.apt.id) === String(a.id)}">${esc(a.name)}</button>`).join('')}<button data-add aria-label="Añadir otro piso">＋</button></div>` : '';
   return `<header class="top"><div class="meta"><button class="logo-btn" data-go="piso" aria-label="Ir al menú principal">${LOGO_IMG}</button>
     <span style="display:flex;gap:8px;align-items:center">
-      <span class="status ${demo?'demo':''}" id="estado"><i></i><span class="st-txt">${demo?'Datos de ejemplo':S.directo?'En directo':'Conectado'}</span></span>
+      <span class="status ${demo?'demo':''}" id="estado"><i></i><span class="st-txt">${demo?'Datos de ejemplo':'Conectado'}</span></span>
       ${S.api.kind === 'supabase' ? (S.anon
         ? `<button class="status" data-google aria-label="Iniciar sesión con Google" style="font-weight:800;white-space:nowrap;flex:none">${GOOGLE_G}Entrar</button>`
         : `<button class="avatar" data-account aria-label="Menú de cuenta" aria-haspopup="true" aria-expanded="false">${avatarInner()}</button>`) : ''}
@@ -1451,7 +1451,7 @@ function conectarDirecto(){
   // Los borrados no se pueden filtrar por piso (solo traen el id): ante cualquiera, se refresca
   ['shopping_items','payments','bulletin_notices','house_rules','recurring_bills','cleaning_zones','apartment_members'].forEach(t =>
     ch.on('postgres_changes', {event:'DELETE', schema:'public', table:t}, cambioEnDirecto));
-  ch.subscribe(st => { S.directo = st === 'SUBSCRIBED'; const e = $('#estado .st-txt'); if (e && !$('#estado').classList.contains('demo')) e.textContent = S.directo ? 'En directo' : 'Conectado'; });
+  ch.subscribe(st => { S.directo = st === 'SUBSCRIBED'; });   // el estado de la cabecera siempre dice «Conectado»: así no parpadea al cambiar de piso
   ch.aptId = apt; canal = ch;
 }
 function cambioEnDirecto(p){
