@@ -2543,11 +2543,14 @@ const REPITE = {weekly:'cada semana',monthly:'cada mes',bimonthly:'cada 2 meses'
    Saldos (quién debe a quién y Saldar) · Movimientos (gastos sueltos, gastos de facturas y pagos)
    · Facturas periódicas. Los cálculos de saldos los hace Supabase (vista apartment_balances). */
 
-// Quién paga a quién para quedar en paz, con el menor número de pagos
-function repartoDeudas(bal){
-  const deudores = [], acreedores = [];
-  Object.entries(bal).forEach(([u, v]) => { const c = Math.round(v*100); if (c < 0) deudores.push([u, -c]); else if (c > 0) acreedores.push([u, c]); });
-  deudores.sort((a,b) => b[1]-a[1]); acreedores.sort((a,b) => b[1]-a[1]);
+// Quién paga a quién para quedar en paz, con el MENOR número de pagos (TEO-33).
+// Un grupo de personas cuyos saldos suman 0 se salda entre sí con (personas − 1) pagos, así que el mínimo
+// es: personas con deuda o crédito − nº máximo de grupos que se saldan por separado. Se busca ese reparto en
+// grupos probando todas las combinaciones (un piso son 2-8 personas; hasta 16 es instantáneo) y, si hay
+// más, o si los saldos no suman 0, se usa el método rápido de emparejar al que más debe con al que más le deben.
+function liquidarGrupo(parte){   // parte: [[usuario, céntimos]] con suma 0 → pagos; cada pago salda a al menos una persona
+  const deudores = parte.filter(p => p[1] < 0).map(p => [p[0], -p[1]]).sort((a,b) => b[1]-a[1]);
+  const acreedores = parte.filter(p => p[1] > 0).map(p => [p[0], p[1]]).sort((a,b) => b[1]-a[1]);
   const out = []; let i = 0, j = 0;
   while (i < deudores.length && j < acreedores.length){
     const x = Math.min(deudores[i][1], acreedores[j][1]);
@@ -2557,13 +2560,33 @@ function repartoDeudas(bal){
   }
   return out;
 }
+function repartoDeudas(bal, yo){
+  const parte = Object.entries(bal).map(([u, v]) => [u, Math.round(v * 100)]).filter(p => p[1] !== 0);
+  const n = parte.length, total = parte.reduce((s, p) => s + p[1], 0);
+  let grupos = [parte];
+  if (n >= 2 && n <= 16 && total === 0){
+    const N = 1 << n, suma = new Int32Array(N), mejor = new Int8Array(N), ult = new Int8Array(N);
+    for (let m = 1; m < N; m++){ const b = 31 - Math.clz32(m & -m); suma[m] = suma[m & (m - 1)] + parte[b][1]; }
+    for (let m = 1; m < N; m++){
+      let max = -1, quien = 0;
+      for (let i = 0; i < n; i++) if (m & (1 << i)){ const v = mejor[m ^ (1 << i)]; if (v > max){ max = v; quien = i; } }
+      mejor[m] = max + (suma[m] === 0 ? 1 : 0); ult[m] = quien;
+    }
+    const orden = []; for (let m = N - 1; m; m ^= 1 << ult[m]) orden.push(ult[m]);   // se reconstruye el orden de personas
+    orden.reverse(); grupos = []; let g = [], acum = 0;
+    orden.forEach(i => { g.push(parte[i]); acum += parte[i][1]; if (acum === 0){ grupos.push(g); g = []; } });
+  }
+  const out = grupos.flatMap(liquidarGrupo);
+  // primero lo tuyo (lo que tienes que pagar o cobrar), luego de mayor a menor
+  return out.sort((a, b) => ((b.from === yo || b.to === yo) - (a.from === yo || a.to === yo)) || b.amount - a.amount);
+}
 const nombreDe = idu => idu === S.api.uid ? 'Tú' : (S.members.find(m => m.id === idu)?.name || 'Antiguo compañero');
 const nombreDeMin = idu => idu === S.api.uid ? 'ti' : (S.members.find(m => m.id === idu)?.name || 'un antiguo compañero');
 
 function saldosHtml(bal){
   if (!bal) return `<section class="sec"><h2>Saldos</h2><p class="err" role="alert">No se han podido cargar los saldos. Recarga la página.</p></section>`;
   const yo = S.api.uid, mio = bal[yo] || 0;
-  const tx = repartoDeudas(bal);
+  const tx = repartoDeudas(bal, yo);
   const estado = Math.abs(mio) < 0.005 ? 'Estás en paz con el piso.' : mio > 0 ? `Te deben ${eur(mio)} en total.` : `Debes ${eur(-mio)} en total.`;
   return `<section class="sec" id="saldos">
     <div class="sec-head"><h2>Saldos</h2></div>
@@ -2571,7 +2594,7 @@ function saldosHtml(bal){
     <div class="cumple" style="margin:10px 0 0">${S.members.map(m => { const v = bal[m.id] || 0;
       return `<span class="chip mag ${mc(m.id)}">${esc(nombreDe(m.id))}: ${v > 0.005 ? '+' : ''}${eur(v)}</span>`; }).join('')}</div>
     <h3 class="wk">Para quedar en paz</h3>
-    ${tx.length ? `<ul class="list">${tx.map(t => {
+    ${tx.length ? `<p class="small dim" style="margin:-4px 0 4px">Con ${tx.length === 1 ? '1 pago' : tx.length + ' pagos'} quedáis todos en paz.${tx.length > 1 && tx.some(t => t.from === yo || t.to === yo) ? ' Primero, lo tuyo.' : ''}</p><ul class="list">${tx.map(t => {
       const k = t.from + '|' + t.to, yoPago = t.from === yo, meDeben = t.to === yo;
       const confirmar = S.saldar === k;
       return `<li style="display:block"><span style="display:flex;justify-content:space-between;gap:10px;align-items:center">
@@ -2580,7 +2603,7 @@ function saldosHtml(bal){
             <span>${yoPago ? `¿Confirmas que ya le has pagado ${eur(t.amount)} a ${esc(nombreDe(t.to))}?` : `¿Confirmas que ${esc(nombreDe(t.from))} te ha pagado ${eur(t.amount)}?`} Quedará anotado y los saldos se actualizan.</span>
             <span class="row"><button class="btn small" data-saldar-ok="${esc(k)}" data-amount="${t.amount}">Sí, saldar</button><button class="btn small ghost" data-saldar-no>Cancelar</button></span></div>`
           : yoPago || meDeben ? `<span class="acts"><button class="btn small" data-saldar="${esc(k)}">${yoPago ? 'Ya le he pagado' : 'Me ha pagado'}</button></span>` : ''}
-      </li>`; }).join('')}</ul>` : '<p class="empty">Nadie debe nada a nadie. 🎉</p>'}
+      </li>`; }).join('')}</ul>` : '<p class="empty">No hay deudas: todos estáis a cero. 🎉</p>'}
     <p class="small dim" style="margin:8px 2px 0">Cada pago se anota en Movimientos. Si te equivocas, lo puede deshacer quien lo anotó.</p>
   </section>`;
 }
