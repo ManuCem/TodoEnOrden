@@ -101,6 +101,16 @@ button{cursor:pointer}
 /* cabecera */
 .top{padding:calc(14px + env(safe-area-inset-top,0px)) 0 16px}
 .logo{display:block;width:72px;height:auto}
+.top .logo{width:46px}
+.top{padding-bottom:8px!important}
+.top .meta{margin-bottom:8px}
+.top h1{font-size:27px}
+.top .pisos{padding-top:8px}
+.top .pisos button{min-height:38px;font-size:14px}
+.top .demo-cta{margin-top:8px;padding:6px 6px 6px 12px;font-size:13.5px}
+.top .demo-cta .btn{min-height:36px}
+.top .volver{margin:4px 0 0}
+.top .volver .link{min-height:32px;font-size:14px}
 .logo-btn{display:block;padding:0;border:0;background:none;border-radius:12px;cursor:pointer;line-height:0}
 .meta{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px;font-size:14px;font-weight:600}
 .status{display:inline-flex;align-items:center;gap:7px;color:var(--muted);font-weight:600;background:var(--paper);
@@ -283,6 +293,11 @@ input.invalid,select.invalid{border-color:var(--bad)}
 .resumen small{display:block;font-size:12px;color:var(--muted);font-weight:700}
 .resumen .mio{border-color:var(--accent)}
 .resumen .full{grid-column:1/-1}
+.parati .list li{padding:0}
+.parati-btn{display:flex;align-items:center;gap:12px;width:100%;min-height:56px;padding:8px 2px;background:none;border:0;color:inherit;font:inherit;text-align:left;cursor:pointer}
+.parati-btn .ico{font-size:20px;width:28px;text-align:center;flex:none}
+.parati-btn>span:last-child{color:var(--muted);font-size:22px;font-weight:700}
+.parati li.mal b{color:var(--bad)}
 .resumen .queda .v{color:var(--bad)}
 .resumen .queda.cero .v{color:var(--ok)}
 /* TEO-21: lo que se está acabando, destacado arriba como prioritario */
@@ -365,8 +380,11 @@ li.paused>.grow,li.paused>.right{opacity:.55}
 .cumple{display:flex;flex-wrap:wrap;gap:6px;margin:4px 0 0}
 .list.receipt li.urgent{background:var(--alert-bg);border-radius:12px;padding-left:12px;padding-right:12px;margin:4px -12px;border-top-color:transparent}
 .list.receipt li.urgent+li{border-top-color:transparent}
-.toast{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(94px + env(safe-area-inset-bottom,0px));z-index:9;
-  max-width:min(440px,calc(100vw - 32px));background:var(--ink);color:var(--paper);padding:12px 16px;border-radius:12px;font-size:15px;font-weight:700}
+.toast{position:fixed;left:50%;transform:translateX(-50%);top:calc(10px + env(safe-area-inset-top,0px));z-index:20;
+  width:max-content;max-width:min(440px,calc(100vw - 24px));background:var(--ink);color:var(--paper);padding:10px 14px;border-radius:12px;font-size:14px;font-weight:700;
+  display:flex;align-items:center;gap:12px;box-shadow:0 8px 24px rgba(0,0,0,.18)}
+.toast[hidden]{display:none}
+.toast-btn{flex:none;background:none;border:0;color:var(--m2,#F2C14E);font:inherit;font-weight:900;text-decoration:underline;min-height:36px;padding:0 2px;cursor:pointer}
 .loading{display:grid;place-items:center;min-height:50vh;color:var(--muted)}
 .confirm{border:2px solid var(--bad);border-radius:12px;padding:12px;margin-top:10px;background:var(--paper)}
 
@@ -406,7 +424,7 @@ li.paused>.grow,li.paused>.right{opacity:.55}
 @keyframes ping{0%{transform:scale(1);opacity:.55}80%,100%{transform:scale(2.8);opacity:0}}
 @keyframes glow{0%,100%{box-shadow:var(--shadow)}50%{box-shadow:var(--shadow),0 0 0 5px color-mix(in srgb,var(--m2) 28%,transparent)}}
 @keyframes menuIn{from{opacity:0;transform:translateY(-10px) scale(.9)}}
-@keyframes toastIn{from{opacity:0;transform:translate(-50%,18px) scale(.94)}}
+@keyframes toastIn{from{opacity:0;transform:translate(-50%,-14px) scale(.96)}}
 @keyframes breathe{0%,100%{opacity:.45}50%{opacity:1}}
 @keyframes ripple{from{transform:scale(0);opacity:.3}to{transform:scale(1);opacity:0}}
 
@@ -560,7 +578,30 @@ function fmtDate(s){ const [y,m,d] = s.split('-').map(Number); return new Date(y
 const FREQ = {weekly:'Semanal',monthly:'Mensual',bimonthly:'Bimestral',quarterly:'Trimestral',yearly:'Anual'};
 const initial = n => (n || '?').trim().charAt(0).toUpperCase() || '?';
 let toastTimer;
-function toast(msg){ const t = $('#toast'); t.textContent = msg; t.hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(()=>{ t.hidden = true; }, 3800); }
+function toast(msg, op = {}){
+  const t = $('#toast'); t.textContent = '';
+  const sp = document.createElement('span'); sp.textContent = msg; t.appendChild(sp);
+  if (op.accion){ const b = document.createElement('button'); b.type = 'button'; b.className = 'toast-btn'; b.textContent = op.accion;
+    b.onclick = () => { clearTimeout(toastTimer); t.hidden = true; op.fn(); }; t.appendChild(b); }
+  t.hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(()=>{ t.hidden = true; }, op.ms || 2600);
+}
+// 8) Deshacer en vez de «¿Seguro?»: se oculta al momento y se hace de verdad a los 5 s, salvo que pulses «Deshacer»
+const ocultos = new Set(), pendientes = new Map();
+function conDeshacer(key, msg, hacer, rehacer){
+  ocultos.add(key);
+  const fin = async () => {
+    pendientes.delete(key);
+    try{ await hacer(); }catch(err){ toast(friendly(err)); }
+    ocultos.delete(key);
+    if (!estaOcupado()) rehacer();
+  };
+  const timer = setTimeout(fin, 5000);
+  pendientes.set(key, {timer, fin});
+  rehacer();
+  toast(msg, {accion:'Deshacer', ms:5000, fn:() => { clearTimeout(timer); pendientes.delete(key); ocultos.delete(key); rehacer(); }});
+}
+// si sales de la app antes de los 5 s, se aplica ya (que no se quede a medias)
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') for (const [, x] of [...pendientes]){ clearTimeout(x.timer); x.fin(); } });
 // quita el mensaje de error de un campo del formulario
 function clearFieldError(id){
   const el = document.getElementById(id), er = document.getElementById('e' + id.slice(1));
@@ -753,7 +794,7 @@ function remoteApi(sb, uid){
     async generateDue(aptId){ return ok(await sb.rpc('generate_due_bills',{p_apartment_id:aptId})) || 0; },
     async billExpenses(aptId){
       const rows = ok(await sb.from('expenses').select('id,description,amount,expense_date,paid_by,created_by,recurring_bill_id,created_at,expense_shares(user_id,amount)')
-        .eq('apartment_id', aptId).not('recurring_bill_id','is',null).is('deleted_at', null).order('expense_date',{ascending:false}).order('created_at',{ascending:false}).limit(20));
+        .eq('apartment_id', aptId).not('recurring_bill_id','is',null).is('deleted_at', null).order('expense_date',{ascending:false}).order('created_at',{ascending:false}).limit(200));
       return rows.map(e => ({id:e.id, name:e.description, amount:Number(e.amount), date:e.expense_date, paid_by:e.paid_by, created_by:e.created_by, bill_id:e.recurring_bill_id,
         shares:(e.expense_shares || []).map(x => ({user_id:x.user_id, amount:Number(x.amount)})).sort((a,b) => (b.user_id===e.paid_by) - (a.user_id===e.paid_by))}));
     },
@@ -993,6 +1034,7 @@ function demoApi(clave){
       x.admin = false; return wait(); },
     removeMember:(a, idu)=>{ if (idu === me) return Promise.reject(new Error('No puedes echarte a ti: usa «Salir del piso»'));
       const k = db.members.findIndex(m => m.id === idu); if (k < 0) return Promise.reject(new Error('Esa persona ya no está en el piso'));
+      if (!db.members.some(m => m.id === me && m.admin)) return Promise.reject(new Error('Solo un admin del piso puede echar a alguien'));
       if (db.members[k].admin) return Promise.reject(new Error('No se puede echar a un admin del piso'));
       db.members.splice(k,1); return wait(); },
     balances:()=>{
@@ -1119,7 +1161,7 @@ function demoApi(clave){
       });
       return wait(n);
     },
-    billExpenses:()=>wait(db.gastos.slice().sort((a,b)=>b.date.localeCompare(a.date)||a.name.localeCompare(b.name,'es')).slice(0,20)),
+    billExpenses:()=>wait(db.gastos.slice().sort((a,b)=>b.date.localeCompare(a.date)||a.name.localeCompare(b.name,'es')).slice(0,200)),
     advanceBill:(billId)=>{ const b = db.bills.find(x=>x.id===billId); const d = new Date(b.next_due_date+'T00:00:00');
       const saltos={weekly:()=>d.setDate(d.getDate()+7),monthly:()=>d.setMonth(d.getMonth()+1),bimonthly:()=>d.setMonth(d.getMonth()+2),quarterly:()=>d.setMonth(d.getMonth()+3),yearly:()=>d.setFullYear(d.getFullYear()+1)};
       (saltos[b.frequency]||saltos.monthly)(); b.next_due_date = iso(d); return wait(); }
@@ -1321,7 +1363,7 @@ async function seleccionarNuevo(antes, code){
 /* ---------- vistas ---------- */
 function header(title){
   const demo = S.api.kind === 'demo';
-  const pisos = demo ? `<div class="pisos-label">Pisos de ejemplo</div><div class="pisos">${
+  const pisos = demo ? `<div class="pisos" role="group" aria-label="Pisos de ejemplo">${
     Object.entries(PISOS).map(([k,p]) => `<button data-piso="${k}" aria-pressed="${S.api.piso===k}">${esc(p.nombre)}</button>`).join('')}</div>` : '';
   const mios = S.api.kind === 'supabase' && !S.agregando && (S.pisos || []).length > 1
     ? `<div class="pisos" role="group" aria-label="Mis pisos">${S.pisos.map(a => `<button data-switch="${esc(a.id)}" aria-pressed="${!!S.apt && String(S.apt.id) === String(a.id)}">${esc(a.name)}</button>`).join('')}<button data-add aria-label="Añadir otro piso">＋</button></div>` : '';
@@ -1336,7 +1378,7 @@ function header(title){
       <div class="who"><b>${esc(nombreVisible())}</b>${S.email ? `<small>${esc(S.email)}</small>` : ''}</div>
       <button data-go="perfil">👤 Mi perfil</button>
       <button data-logout>↩ Cerrar sesión</button></div>` : ''}</div>
-    <h1>${esc(title)}</h1>${demo ? '<p class="volver" style="margin:10px 0 0"><button class="link" data-inicio>← Volver a la portada</button></p>' : ''}${pisos}${mios}${demo ? `<div class="demo-cta" role="note"><span><b>Estás en la demo.</b> Los datos son de ejemplo y no se guardan.</span>
+    <h1>${esc(title)}</h1>${demo ? '<p class="volver" style="margin:10px 0 0"><button class="link" data-inicio>← Volver a la portada</button></p>' : ''}${pisos}${mios}${demo ? `<div class="demo-cta" role="note"><span><b>Demo:</b> los datos no se guardan.</span>
       <button class="btn small" data-salir-demo>Crear mi piso</button></div>` : ''}${avisoCuentaHtml()}${bannerHtml()}</header>`;
 }
 // Cuenta anónima dentro de un piso: si cambia de móvil o borra el navegador, sería otra persona. Se le pide guardarla con Google.
@@ -1931,7 +1973,7 @@ function localNow(minutos = 0){
 }
 /* Subpestañas dentro de cada sección, para no tener que bajar tanto */
 const SUBS = {
-  piso:     [['inicio','Inicio','#app .turno, #app .invitar'], ['comp','Compañeros','#comp'], ['ajustes','Ajustes','#ajustes']],
+  piso:     [['inicio','Inicio','#app .turno, #app .invitar, #app .parati'], ['comp','Compañeros','#comp'], ['ajustes','Ajustes','#ajustes']],
   compra:   [['pend','Por comprar','[data-g="pend"]'], ['hechos','Ya comprado','[data-g="hechos"]']],
   limpieza: [['semana','Esta semana','#semana'], ['zonas','Zonas','#zonas'], ['hist','Histórico','#hist']],
   facturas: [['saldos','Saldos','#saldos'], ['movs','Movimientos','#movs'], ['facts','Facturas','#facts']]
@@ -2149,15 +2191,41 @@ ${esc(d.description || '')}</dd>` : '';
   };
 }
 
+// 5) Avisos para ti: lo que te toca hacer o pagar y lo que ha pasado desde tu última visita
+async function paraTiHtml(apt){
+  const nada = () => [];
+  const [bal, bills, pagos, gastos, items, manuales] = await Promise.all([
+    S.api.balances(apt.id).catch(() => null), S.api.bills(apt.id).catch(nada), S.api.billPayments(apt.id).catch(nada),
+    S.api.billExpenses(apt.id).catch(nada), S.api.items(apt.id).catch(nada), S.api.expenses(apt.id).catch(nada)]);
+  const yo = S.api.uid, filas = [];
+  const fila = (ico, txt, go, sub, cls = '') => filas.push(`<li class="${cls}"><button type="button" class="parati-btn" data-go="${go}"${sub ? ` data-subgo="${sub}"` : ''}><span class="ico" aria-hidden="true">${ico}</span><span class="grow">${txt}</span><span aria-hidden="true">›</span></button></li>`);
+  const r = resumenMes(bills, pagos, gastos);
+  const urg = r.faltan.filter(o => daysUntil(o.due) <= 3), deuda = r.antes.length + urg.length;
+  if (deuda){ const tot = Math.round((r.deAntes + urg.reduce((x, o) => x + o.parte, 0)) * 100) / 100;
+    const nombres = [...new Set([...r.antes, ...urg].map(o => o.name))];
+    fila('🧾', `<b>Te toca pagar ${eur(tot)} de facturas</b><br><span class="small dim">${esc(nombres.slice(0,3).join(', '))}${nombres.length > 3 ? '…' : ''}</span>`, 'facturas', 'facts', 'mal'); }
+  const mio = bal ? bal[yo] || 0 : 0;
+  if (mio < -0.005) fila('💸', `<b>Debes ${eur(-mio)} en total</b><br><span class="small dim">Mira a quién en Saldos</span>`, 'facturas', 'saldos', 'mal');
+  else if (mio > 0.005) fila('💰', `<b>Te deben ${eur(mio)}</b><br><span class="small dim">Mira quién en Saldos</span>`, 'facturas', 'saldos');
+  const bajos = items.filter(i => !i.is_bought && i.running_low);
+  if (bajos.length) fila('⚠', `<b>${bajos.length === 1 ? 'Se está acabando' : `Se están acabando ${bajos.length} cosas`}</b><br><span class="small dim">${esc(bajos.slice(0,3).map(i => i.name).join(', '))}${bajos.length > 3 ? '…' : ''}</span>`, 'compra', 'pend');
+  let visto = null; try{ visto = safeStorage.getItem('teo_visto_' + apt.id); }catch{}
+  if (visto){
+    const nuevos = [...manuales, ...gastos].filter(g => g.created_at && g.created_at > visto && g.created_by !== yo);
+    if (nuevos.length) fila('🆕', `<b>${nuevos.length === 1 ? '1 gasto nuevo' : nuevos.length + ' gastos nuevos'} desde tu última visita</b><br><span class="small dim">${esc(nuevos.slice(0,3).map(g => g.name).join(', '))}${nuevos.length > 3 ? '…' : ''}</span>`, 'facturas', 'movs');
+  }
+  return `<section class="sec parati"><div class="sec-head"><h2>Para ti</h2>${filas.length ? `<span class="count">${filas.length}</span>` : ''}</div>
+    ${filas.length ? `<ul class="list">${filas.join('')}</ul>` : '<p class="sub" style="margin:0">Todo al día: no debes nada ni hay nada urgente. 🎉</p>'}</section>`;
+}
 async function renderPiso(){
   const apt = S.apt;
   let asg = null;
-  const [, mem] = await Promise.all([loadWeek(), S.api.members(apt.id).catch(() => null)]);
+  const [, mem, paraTi] = await Promise.all([loadWeek(), S.api.members(apt.id).catch(() => null), paraTiHtml(apt).catch(() => '')]);
   if (mem) S.members = mem;
   try{ asg = await S.api.assignments(apt.id, iso(curMonday())); }catch{ asg = null; }
   if (S.tab !== 'piso' || S.apt !== apt) return;
   const tiles = apt.invite_code.split('').map((c,i) => `<span class="tile mag m${(i%6)+1}">${esc(c)}</span>`).join('');
-  app.innerHTML = `${header(apt.name)}${subtabsHtml('piso', {comp:S.members.length})}${turnoHtml(asg)}
+  app.innerHTML = `${header(apt.name)}${subtabsHtml('piso', {comp:S.members.length})}${paraTi}${turnoHtml(asg)}
     <section class="sec invitar">
       <details id="invDet" ${S.showInvite || S.members.length < 2 ? 'open' : ''}>
       <summary class="btn ghost">Invitar a alguien</summary>
@@ -2180,7 +2248,7 @@ async function renderPiso(){
       <div class="sec-head"><h2>Compañeros</h2><span class="count">${S.members.length}</span></div>
       <ul class="list">${S.members.map(m => {
         const soyAdmin = esAdmin(), otrosAdmins = S.members.filter(x => x.admin && x.id !== S.api.uid).length;
-        const puedeEchar = m.id !== S.api.uid && !m.admin;
+        const puedeEchar = soyAdmin && m.id !== S.api.uid && !m.admin;   // solo un admin echa, y nunca a otro admin
         const puedeAdmin = soyAdmin && !m.admin && hayAdmins();                   // solo un admin nombra a otros admins
         const puedeBaja = m.id === S.api.uid && m.admin && otrosAdmins > 0;       // dejar de ser admin: solo uno mismo y si queda otro
         const saldo = S.echar === m.id && S.echarSaldo ? S.echarSaldo[m.id] || 0 : 0;
@@ -2204,7 +2272,7 @@ async function renderPiso(){
               Si conserva el código del piso, podría volver a unirse.</span>
             <span class="row"><button class="btn small danger" data-echar-ok="${esc(m.id)}">Sí, echar</button><button class="btn small ghost" data-echar-no>Cancelar</button></span></div>` : ''}
         </li>`; }).join('')}</ul>
-      ${S.members.length > 1 ? `<p class="small dim" style="margin:8px 2px 0">Cualquiera del piso puede echar a otro compañero, menos a un admin. ${hayAdmins() ? (esAdmin() ? 'Tú, que eres admin, puedes nombrar a otros admins con «Hacer admin».' : 'Solo un admin puede nombrar a otros admins.') : ''}</p>` : ''}
+      ${S.members.length > 1 ? `<p class="small dim" style="margin:8px 2px 0">${esAdmin() ? 'Eres admin: puedes echar a un compañero (nunca a otro admin) y nombrar a otros admins con «Hacer admin».' : 'Solo un admin puede echar a alguien del piso o nombrar a otros admins.'}</p>` : ''}
     </section>
     ${ajustesPisoHtml(apt)}`;
   bindAjustesPiso(apt);
@@ -2349,7 +2417,8 @@ function filtrarCompra(){
   res.textContent = q ? (total ? `${total} ${total === 1 ? 'producto' : 'productos'} con «${(S.qCompra || '').trim()}»` : '') : '';
 }
 async function renderCompra(){
-  const items = await S.api.items(S.apt.id);
+  const items = (await S.api.items(S.apt.id)).filter(i => !ocultos.has('i:' + i.id))
+    .map(i => ocultos.has('u:' + i.id) ? {...i, is_bought:false, bought_by:null, bought_at:null, expense:null} : i);
   const pend = items.filter(i => !i.is_bought);
   const bajos = pend.filter(i => i.running_low).sort((a,b) => String(b.low_at||'').localeCompare(String(a.low_at||'')));
   const comprados = items.filter(i => i.is_bought).sort((a,b) => String(b.bought_at||'').localeCompare(String(a.bought_at||'')));
@@ -2367,20 +2436,27 @@ async function renderCompra(){
   const importe = i => i.expense && !i.expense.deleted_at ? Number(i.expense.amount) || 0 : 0;
   const suma = l => Math.round(l.reduce((a, i) => a + importe(i), 0) * 100) / 100;
   const sinPrecio = l => l.filter(i => !importe(i)).length;
-  const mios = comprados.filter(i => i.bought_by === S.api.uid), otros = comprados.filter(i => i.bought_by !== S.api.uid);
+  const per = ['mes','pasado','todo'].includes(S.compraPeriodo) ? S.compraPeriodo : 'mes';
+  const mesN = d => { const x = new Date(d); return x.getFullYear() * 12 + x.getMonth(); }, hoyN = mesN(new Date());
+  const enPer = (i, k) => k === 'todo' || (!!i.bought_at && mesN(i.bought_at) === hoyN - (k === 'pasado' ? 1 : 0));
+  const enPeriodo = comprados.filter(i => enPer(i, per));
+  const nomMes = k => { const d = new Date(); d.setDate(1); if (k === 'pasado') d.setMonth(d.getMonth() - 1); return d.toLocaleDateString('es-ES', {month:'long'}); };
+  const periodosHtml = `<div class="filtros" role="group" aria-label="Periodo">${[['mes','Este mes'],['pasado','Mes pasado'],['todo','Todo']].map(([k,v]) =>
+    `<button type="button" class="filtro" data-cper="${k}" aria-pressed="${per === k}">${v} <span>${comprados.filter(i => enPer(i, k)).length}</span></button>`).join('')}</div>`;
+  const mios = enPeriodo.filter(i => i.bought_by === S.api.uid), otros = enPeriodo.filter(i => i.bought_by !== S.api.uid);
   const porDias = lista => { const g = []; for (const i of lista){ const et = dayLabel(i.bought_at), x = g.find(y => y.et === et); if (x) x.items.push(i); else g.push({et, items:[i]}); } return g; };
   const bloqueHecho = (et, lista) => `<div class="day">${esc(et)} <span class="n">${lista.length}</span><span class="tot">${eur(suma(lista))}</span></div>
     <ul class="list">${lista.map(filaCompra).join('')}</ul>`;
   const seccionHecha = (titulo, lista) => lista.length ? `<h3 class="wk">${titulo} <span class="n small dim">${lista.length} · ${eur(suma(lista))}</span></h3>${porDias(lista).map(d => bloqueHecho(d.et, d.items)).join('')}` : '';
   const cf = ['mios','otros'].includes(S.compraFiltro) ? S.compraFiltro : 'todos';
-  const filtrosHechos = comprados.length ? `<div class="filtros" role="group" aria-label="Filtrar lo comprado">${[['todos','Todos',comprados.length],['mios','Comprado por mí',mios.length],['otros','Por compañeros',otros.length]].map(([k,v,n]) =>
+  const filtrosHechos = enPeriodo.length ? `<div class="filtros" role="group" aria-label="Filtrar lo comprado">${[['todos','Todos',enPeriodo.length],['mios','Comprado por mí',mios.length],['otros','Por compañeros',otros.length]].map(([k,v,n]) =>
     `<button type="button" class="filtro" data-cfiltro="${k}" aria-pressed="${cf === k}">${v} <span>${n}</span></button>`).join('')}</div>` : '';
   const vacioHecho = txt => `<p class="empty">${txt}</p>`;
-  const resumenHechos = comprados.length ? `<div class="resumen" aria-label="Lo gastado en compra">
+  const resumenHechos = enPeriodo.length ? `<div class="resumen" aria-label="Lo gastado en compra">
       <div class="mio"><b>Tú</b><span class="v">${eur(suma(mios))}</span><small>${mios.length} ${mios.length === 1 ? 'producto' : 'productos'}</small></div>
       <div><b>Compañeros</b><span class="v">${eur(suma(otros))}</span><small>${otros.length} ${otros.length === 1 ? 'producto' : 'productos'}</small></div>
-      <div class="full"><b>Total</b><span class="v">${eur(suma(comprados))}</span><small>${comprados.length} ${comprados.length === 1 ? 'producto' : 'productos'}</small></div></div>
-    ${sinPrecio(comprados) ? `<p class="small dim" style="margin:2px 2px 0">Los totales solo suman lo que tiene el precio anotado (${sinPrecio(comprados)} sin precio).</p>` : ''}` : '';
+      <div class="full"><b>Total ${per === 'todo' ? 'desde el principio' : 'en ' + esc(nomMes(per))}</b><span class="v">${eur(suma(enPeriodo))}</span><small>${enPeriodo.length} ${enPeriodo.length === 1 ? 'producto' : 'productos'}</small></div></div>
+    ${sinPrecio(enPeriodo) ? `<p class="small dim" style="margin:2px 2px 0">Los totales solo suman lo que tiene el precio anotado (${sinPrecio(enPeriodo)} sin precio).</p>` : ''}` : '';
 
   app.innerHTML = `${header('Compra común')}${subtabsHtml('compra', {pend:pend.length, hechos:comprados.length})}
     <section class="sec">
@@ -2400,9 +2476,9 @@ async function renderCompra(){
       </div>
       <div data-g="hechos">
       <div class="sec-head"><h2>Ya comprado</h2><span class="count">${comprados.length}</span></div>
-      ${comprados.length ? resumenHechos + filtrosHechos
+      ${comprados.length ? periodosHtml + (!enPeriodo.length ? `<p class="empty">Nada comprado ${per === 'pasado' ? 'el mes pasado' : 'este mes'}.</p>` : '') + resumenHechos + filtrosHechos
         + (cf !== 'otros' ? (mios.length ? seccionHecha('Comprado por mí', mios) : (cf === 'mios' ? vacioHecho('Todavía no has comprado nada.') : '')) : '')
-        + (cf !== 'mios' ? (otros.length ? seccionHecha('Comprado por los compañeros', otros) : (cf === 'otros' ? vacioHecho('Tus compañeros todavía no han comprado nada.') : '')) : '') + '<p class="small dim" style="margin:6px 2px 0">Si tachaste algo por error, vuelve a pulsarlo y regresa a «Por comprar». Si lo compraste tú, puedes anotar lo que costó; si lo destachas o lo quitas, ese gasto se elimina.</p>'
+        + (cf !== 'mios' ? (otros.length ? seccionHecha('Comprado por los compañeros', otros) : (cf === 'otros' ? vacioHecho('Tus compañeros todavía no han comprado nada.') : '')) : '') + '<p class="small dim" style="margin:6px 2px 0">Si tachaste algo por error, vuelve a pulsarlo y regresa a «Por comprar» (tienes 5 segundos para deshacerlo). Si lo compraste tú, puedes anotar lo que costó; si lo destachas o lo quitas, ese gasto se elimina.</p>'
         : '<p class="empty">Todavía no se ha tachado nada.</p>'}
       </div>
     </section>`;
@@ -2417,8 +2493,14 @@ async function renderCompra(){
   app.querySelectorAll('[data-b]').forEach(b => b.onclick = async () => {
     if (b.disabled) return;
     if (b.getAttribute('aria-pressed') !== 'true'){ S.compraPrecio = b.dataset.b; S.editItem = null; await renderCompra(); $('#compraIn')?.focus(); return; }   // al tachar, se puede poner el precio
+    const reCompra = () => { if (S.tab === 'compra') renderCompra(); };
+    if (b.getAttribute('aria-pressed') === 'true'){
+      const idb = b.dataset.b, x = items.find(y => y.id === idb), g = conGasto(idb);
+      conDeshacer('u:' + idb, `«${x?.name || 'Producto'}» vuelve a Por comprar${g ? ` y se elimina su gasto de ${eur(g.expense.amount)}` : ''}.`, () => S.api.setBought(idb, false), reCompra);
+      return;
+    }
     b.disabled = true;
-    const it = b.getAttribute('aria-pressed') === 'true' ? conGasto(b.dataset.b) : null;
+    const it = null;
     const baja = b.getAttribute('aria-pressed') !== 'true' ? items.find(x => x.id === b.dataset.b && x.running_low) : null;
     try{ await S.api.setBought(b.dataset.b, b.getAttribute('aria-pressed') !== 'true');
       if (it) toast(`También se ha eliminado su gasto de ${eur(it.expense.amount)}: ya no se debe.`);
@@ -2438,10 +2520,11 @@ async function renderCompra(){
     try{ await S.api.reportLow(S.apt.id, b.dataset.lowname); toast(`«${b.dataset.lowname}» se está acabando: sube arriba como prioritario.`); }catch(err){ toast(friendly(err)); }
     await renderCompra();
   });
-  app.querySelectorAll('[data-d]').forEach(b => b.onclick = async () => {
-    const it = conGasto(b.dataset.d);
-    try{ await S.api.delItem(b.dataset.d); if (it) toast(`Quitado. También se ha eliminado su gasto de ${eur(it.expense.amount)}.`); await renderCompra(); }catch(err){ toast(friendly(err)); }
+  app.querySelectorAll('[data-d]').forEach(b => b.onclick = () => {
+    const idd = b.dataset.d, x = items.find(y => y.id === idd), it = conGasto(idd);
+    conDeshacer('i:' + idd, `«${x?.name || 'Producto'}» quitado${it ? ` y su gasto de ${eur(it.expense.amount)}` : ''}.`, () => S.api.delItem(idd), () => { if (S.tab === 'compra') renderCompra(); });
   });
+  app.querySelectorAll('[data-cper]').forEach(b => b.onclick = async () => { S.compraPeriodo = b.dataset.cper; await renderCompra(); });
   app.querySelectorAll('[data-cfiltro]').forEach(b => b.onclick = async () => { S.compraFiltro = b.dataset.cfiltro; await renderCompra(); });
   app.querySelectorAll('[data-compra-no]').forEach(b => b.onclick = async () => { S.compraPrecio = null; await renderCompra(); });
   const fc = app.querySelector('form[data-compra]');
@@ -2697,6 +2780,7 @@ function saldosHtml(bal){
     <div class="cumple" style="margin:10px 0 0">${S.members.map(m => { const v = bal[m.id] || 0;
       return `<span class="chip mag ${mc(m.id)}">${esc(nombreDe(m.id))}: ${v > 0.005 ? '+' : ''}${eur(v)}</span>`; }).join('')}</div>
     <h3 class="wk">Para quedar en paz</h3>
+    <p class="small dim" style="margin:0 0 4px;line-height:1.5">«Saldar» apunta un pago y baja lo que debes. Si ya pagaste una factura con «Pagar mi parte», no la saldes también: ya cuenta aquí.</p>
     ${tx.length ? `<p class="small dim" style="margin:-4px 0 4px">Con ${tx.length === 1 ? '1 pago' : tx.length + ' pagos'} quedáis todos en paz.${tx.length > 1 && tx.some(t => t.from === yo || t.to === yo) ? ' Primero, lo tuyo.' : ''}</p><ul class="list">${tx.map(t => {
       const k = t.from + '|' + t.to, yoPago = t.from === yo, meDeben = t.to === yo;
       const confirmar = S.saldar === k;
@@ -2831,6 +2915,7 @@ function movimientosHtml(mov){
 
 // Resumen del mes en curso: lo que hay que pagar en total, lo que ya has pagado tú y lo que te queda.
 // Cuenta los vencimientos del mes ya creados (gastos) y los que aún no han vencido; las facturas en pausa no cuentan.
+const AYUDA_PAGOS = `<p class="small dim ayuda-pagos" style="margin:8px 2px 0;line-height:1.5"><b>«Pagar mi parte»</b> (aquí) y <b>«Saldar»</b> (en Saldos) hacen lo mismo: apuntan que has pagado y bajan lo que debes. Usa uno de los dos para cada pago, no los dos, o se contará doble.</p>`;
 function sumaFrecuencia(iso, freq){
   const [y, m, d] = iso.split('-').map(Number), meses = {monthly:1, bimonthly:2, quarterly:3, yearly:12}[freq];
   if (!meses){ const t = new Date(y, m - 1, d + 7); return `${t.getFullYear()}-${String(t.getMonth()+1).padStart(2,'0')}-${String(t.getDate()).padStart(2,'0')}`; }
@@ -2843,37 +2928,59 @@ function resumenMes(bills, pagos, gastos){
   const occ = [];
   for (const g of gastos) if (String(g.date).slice(0, 7) === ym){
     const mia = (g.shares || []).find(x => x.user_id === yo);
-    occ.push({bill:g.bill_id, name:g.name, due:g.date, total:Number(g.amount), parte: mia ? mia.amount : Math.round(Number(g.amount) / n * 100) / 100, adelanta:g.paid_by === yo});
+    occ.push({bill:g.bill_id, name:g.name, due:g.date, total:Number(g.amount), parte: mia ? mia.amount : 0, adelanta:g.paid_by === yo,   // si no entras en el reparto, no debes nada
+      payer:g.paid_by, shares:(g.shares || []).map(x => ({u:x.user_id, a:Number(x.amount)}))});
   }
   for (const b of bills){
     if (b.is_paused) continue;
     let d = b.next_due_date, k = 0;
     while (d.slice(0, 7) <= ym && k++ < 40){
       if (d.slice(0, 7) === ym && !occ.some(o => o.bill === b.id && o.due === d))
-        occ.push({bill:b.id, name:b.name, due:d, total:Number(b.amount), parte:Math.round(Number(b.amount) / n * 100) / 100, adelanta:b.paid_by === yo});
+        occ.push({bill:b.id, name:b.name, due:d, total:Number(b.amount), parte:Math.round(Number(b.amount) / n * 100) / 100, adelanta:b.paid_by === yo,
+          payer:b.paid_by, shares:S.members.map(m => ({u:m.id, a:Math.round(Number(b.amount) / n * 100) / 100}))});
       d = sumaFrecuencia(d, b.frequency);
     }
   }
-  let total = 0, mio = 0, pagado = 0; const faltan = [];
+  // pagado = tu parte de facturas que adelantó otra persona y ya marcaste como pagada (dinero que ya has dado)
+  // adelantas = facturas que pagas tú enteras; te deben = las partes de los demás que aún no han marcado como pagadas
+  let total = 0, mio = 0, pagado = 0, adelantas = 0, teDeben = 0, nAdel = 0; const faltan = [], marcado = (o, u) => pagos.some(p => p.bill_id === o.bill && p.due_date === o.due && p.user_id === u);
   for (const o of occ){
     total += o.total; mio += o.parte;
-    if (o.adelanta || pagos.some(p => p.bill_id === o.bill && p.due_date === o.due && p.user_id === yo)) pagado += o.parte;
+    if (o.adelanta){ adelantas += o.total; nAdel++; for (const x of o.shares) if (x.u !== yo && !marcado(o, x.u)) teDeben += x.a; }
+    else if (marcado(o, yo)) pagado += o.parte;
     else if (o.parte > 0) faltan.push(o);
   }
+  // la misma factura dos veces en un mes con frecuencia mensual o mayor suele ser un duplicado (p. ej., se cambió la fecha)
+  const dup = [...new Set(occ.filter(o => { const b = bills.find(x => x.id === o.bill); return (!b || b.frequency !== 'weekly') && occ.filter(z => z.bill === o.bill).length > 1; }).map(o => o.name))];
   faltan.sort((a, b) => a.due.localeCompare(b.due) || a.name.localeCompare(b.name, 'es'));
+  // De meses anteriores: vencimientos ya pasados que adelantó otro y en los que no has marcado tu parte
+  const antes = [];
+  for (const g of gastos){
+    if (String(g.date) >= ym + '-01' || g.paid_by === yo) continue;
+    const mia = (g.shares || []).find(x => x.user_id === yo); if (!mia || !(mia.amount > 0)) continue;
+    if (pagos.some(p => p.bill_id === g.bill_id && p.due_date === g.date && p.user_id === yo)) continue;
+    antes.push({bill:g.bill_id, name:g.name, due:g.date, parte:mia.amount});
+  }
+  antes.sort((a, b) => a.due.localeCompare(b.due));
   const r = x => Math.round(x * 100) / 100;
-  return {n:occ.length, total:r(total), mio:r(mio), pagado:r(pagado), queda:r(Math.max(mio - pagado, 0)), faltan, mes:h.toLocaleDateString('es-ES', {month:'long'})};
+  const queda = r(faltan.reduce((x, o) => x + o.parte, 0));
+  return {n:occ.length, total:r(total), mio:r(mio), pagado:r(pagado), queda, adelantas:r(adelantas), nAdel, teDeben:r(teDeben), dup, faltan, antes, deAntes:r(antes.reduce((x, o) => x + o.parte, 0)), mes:h.toLocaleDateString('es-ES', {month:'long'})};
 }
 function resumenMesHtml(bills, pagos, gastos){
   const r = resumenMes(bills, pagos, gastos);
-  if (!r.n) return `<p class="small dim" style="margin:2px 2px 0">Este mes (${esc(r.mes)}) no hay facturas por pagar.</p>`;
+  const filaPagar = o => `<li><span class="grow"><span class="name">${esc(o.name)}</span><br><span class="small dim">${esc(fmtDate(o.due))}${daysUntil(o.due) > 0 ? ' · todavía no ha vencido' : ''}</span></span>
+        <button class="btn small" data-pay="${esc(o.bill)}" data-due="${esc(o.due)}" data-on="false" aria-label="Pagar mi parte de ${esc(o.name)} del ${esc(fmtDate(o.due))}">Pagar ${eur(o.parte)}</button></li>`;
+  const antesHtml = r.antes.length ? `<div class="resumen mes" style="margin-top:6px"><div class="queda full"><b>Pendiente de meses anteriores</b><span class="v">${eur(r.deAntes)}</span><small>${r.antes.length} ${r.antes.length === 1 ? 'factura' : 'facturas'} que adelantó otra persona y no has marcado como pagadas</small></div></div>
+    <div class="faltan"><ul class="list">${r.antes.map(filaPagar).join('')}</ul></div>` : '';
+  if (!r.n) return `<p class="small dim" style="margin:2px 2px 0">Este mes (${esc(r.mes)}) no hay facturas por pagar.</p>${antesHtml}${AYUDA_PAGOS}`;
   return `<div class="resumen mes" aria-label="Facturas de ${esc(r.mes)}">
     <div class="queda ${r.queda < 0.005 ? 'cero' : ''}"><b>Te queda por pagar</b><span class="v">${eur(r.queda)}</span><small>de tu parte de ${esc(r.mes)}</small></div>
-    <div><b>Ya pagado</b><span class="v">${eur(r.pagado)}</span><small>tu parte</small></div>
-    <div class="full"><b>A pagar en ${esc(r.mes)}, en total</b><span class="v">${eur(r.total)}</span><small>${r.n} ${r.n === 1 ? 'factura' : 'facturas'} entre todos · tu parte ${eur(r.mio)}. Si adelantas tú una factura, tu parte cuenta como pagada.</small></div></div>
+    <div><b>Ya pagado</b><span class="v">${eur(r.pagado)}</span><small>tu parte, a quien adelantó</small></div>
+    ${r.nAdel ? `<div class="full"><b>Adelantas tú</b><span class="v">${eur(r.adelantas)}</span><small>${r.nAdel} ${r.nAdel === 1 ? 'factura' : 'facturas'} que pagas entera${r.nAdel === 1 ? '' : 's'}. ${r.teDeben > 0.005 ? `Los demás te deben ${eur(r.teDeben)} de ellas.` : 'Los demás ya te han pagado su parte.'}</small></div>` : ''}
+    <div class="full"><b>Facturas de ${esc(r.mes)}, en total</b><span class="v">${eur(r.total)}</span><small>${r.n} ${r.n === 1 ? 'cargo' : 'cargos'} entre todos · tu parte ${eur(r.mio)}</small></div></div>
+    ${r.dup.length ? `<p class="small" style="margin:6px 2px 0;color:var(--bad);font-weight:800">⚠ ${esc(r.dup.join(', '))} aparece${r.dup.length > 1 ? 'n' : ''} dos veces este mes. Si es un error, elimina el gasto que sobra en Movimientos.</p>` : ''}
     ${r.faltan.length ? `<div class="faltan"><p class="small" style="margin:6px 2px 4px;font-weight:900">Te falta por pagar en ${esc(r.mes)}:</p>
-      <ul class="list">${r.faltan.map(o => `<li><span class="grow"><span class="name">${esc(o.name)}</span><br><span class="small dim">${esc(fmtDate(o.due))}${daysUntil(o.due) > 0 ? ' · todavía no ha vencido' : ''}</span></span>
-        <button class="btn small" data-pay="${esc(o.bill)}" data-due="${esc(o.due)}" data-on="false" aria-label="Pagar mi parte de ${esc(o.name)} del ${esc(fmtDate(o.due))}">Pagar ${eur(o.parte)}</button></li>`).join('')}</ul></div>` : ''}`;
+      <ul class="list">${r.faltan.map(filaPagar).join('')}</ul></div>` : ''}${antesHtml}${AYUDA_PAGOS}`;
 }
 function facturasHtml(bills, pagos, gastos = []){
   const n = Math.max(S.members.length, 1), yo = S.api.uid;
@@ -2953,7 +3060,8 @@ async function renderFacturas(){
     ...manuales.map(g => ({tipo:'suelto', key:'g:' + g.id, date:g.date, ts:g.date + '|' + (g.created_at || ''), g})),
     ...gastos.map(g => ({tipo:'factura', key:'f:' + g.id, date:g.date, ts:g.date + '|', g, pagos})),
     ...pays.map(p => { const d = iso(new Date(p.paid_at)); return {tipo:'pago', key:'p:' + p.id, id:p.id, date:d, ts:d + '|' + p.paid_at, from:p.from_user, to:p.to_user, amount:Number(p.amount), created_by:p.created_by}; })
-  ].sort((a,b) => b.ts.localeCompare(a.ts));
+  ].filter(m => !ocultos.has('m:' + m.key)).sort((a,b) => b.ts.localeCompare(a.ts));
+  try{ safeStorage.setItem('teo_visto_' + apt.id, new Date().toISOString()); }catch{}   // para «Novedades desde tu última visita»
   app.innerHTML = `${header('Gastos y facturas')}${subtabsHtml('facturas', {movs:mov.length, facts:bills.length})}${saldosHtml(bal)}${movimientosHtml(mov)}${facturasHtml(bills, pagos, gastos)}`;
   aplicarSub('facturas');
   bindGastos(bills, mov);
@@ -2987,7 +3095,11 @@ function bindGastos(bills, mov){
   const mas = $('#movMas'); if (mas) mas.onclick = () => { S.movTodos = true; filtrarMov(); };
   const qm = $('#qMov'); if (qm){ qm.addEventListener('input', () => { S.qMov = qm.value; filtrarMov(); }); }
   filtrarMov();
-  app.querySelectorAll('[data-mdel]').forEach(b => b.onclick = () => { S.movDel = b.dataset.mdel; re(); });
+  app.querySelectorAll('[data-mdel]').forEach(b => b.onclick = () => {
+    const key = b.dataset.mdel, t = key.slice(0,1), idm = key.slice(2);
+    conDeshacer('m:' + key, t === 'p' ? 'Pago deshecho: ya no cuenta en los saldos.' : 'Gasto eliminado: nadie debe nada por él.',
+      () => t === 'p' ? S.api.delPayment(idm) : S.api.delExpense(idm), () => { if (S.tab === 'facturas') renderFacturas(); });
+  });
   app.querySelectorAll('[data-medit]').forEach(b => b.onclick = async () => {
     const m = mov.find(x => x.tipo === 'suelto' && x.g.id === b.dataset.medit); if (!m) return;
     S.gastoEdit = m.g; S.gastoTipo = null; S.gastoForm = true; S.movDel = null; await re();
@@ -3007,7 +3119,7 @@ function bindGastos(bills, mov){
     btn.disabled = true;
     try{
       if (btn.dataset.on === 'true') await S.api.unpayShare(btn.dataset.pay, btn.dataset.due);
-      else { await S.api.payShare(S.apt.id, btn.dataset.pay, btn.dataset.due); toast('Tu parte queda marcada como pagada.'); }
+      else { await S.api.payShare(S.apt.id, btn.dataset.pay, btn.dataset.due); toast('Tu parte queda pagada. Ya cuenta en los saldos.'); }
     }catch(err){ toast(friendly(err)); }
     re();
   });
