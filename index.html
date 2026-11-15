@@ -274,6 +274,17 @@ input.invalid,select.invalid{border-color:var(--bad)}
 .day::after{content:"";flex:1;height:1.5px;background:var(--accent-soft)}
 .day:first-child{margin-top:6px}
 .day .n{font-weight:800;color:var(--muted);letter-spacing:0}
+.day .tot{order:2;color:var(--ink);letter-spacing:0;font-variant-numeric:tabular-nums}
+.day::after{order:1}
+.resumen{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin:10px 0 4px}
+.resumen>div{border:1.5px solid var(--line);border-radius:12px;padding:8px 10px;background:var(--paper);min-width:0}
+.resumen b{display:block;font-size:11px;font-weight:900;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+.resumen .v{display:block;font-size:19px;font-weight:900;color:var(--ink);font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
+.resumen small{display:block;font-size:12px;color:var(--muted);font-weight:700}
+.resumen .mio{border-color:var(--accent)}
+.resumen .full{grid-column:1/-1}
+.resumen .queda .v{color:var(--bad)}
+.resumen .queda.cero .v{color:var(--ok)}
 /* TEO-21: lo que se está acabando, destacado arriba como prioritario */
 .day.low{color:var(--alert-ink)}
 .day.low::after{background:var(--alert-ink);opacity:.35}
@@ -1398,7 +1409,7 @@ app.addEventListener('click', async e => {
   if (e.target.closest('[data-logout]')){ await S.sb.auth.signOut(); S.tab = 'facturas'; await boot(false); return; }
   const g = e.target.closest('[data-go]'); if (!g) return;
   if (g.dataset.subgo){ S.sub = S.sub || {}; S.sub[g.dataset.go] = g.dataset.subgo; }
-  S.tab = g.dataset.go; S.editItem = null; S.editBill = null; S.normaForm = null; S.normaDel = null; S.avisoForm = false; S.avisoDel = null; S.gastoForm = false; S.gastoEdit = null; S.gastoTipo = null; S.gastoDel = null; S.echar = null; S.admin = null; S.saldar = null; S.movDel = null; S.billForm = false; S.precioItem = null; S.histTodo = false; render(); window.scrollTo(0,0);
+  S.tab = g.dataset.go; S.editItem = null; S.editBill = null; S.normaForm = null; S.normaDel = null; S.avisoForm = false; S.avisoDel = null; S.gastoForm = false; S.gastoEdit = null; S.gastoTipo = null; S.gastoDel = null; S.echar = null; S.admin = null; S.saldar = null; S.movDel = null; S.billForm = false; S.precioItem = null; S.compraPrecio = null; S.histTodo = false; render(); window.scrollTo(0,0);
 });
 /* Animaciones: onda al pulsar y entrada al cambiar de pestaña */
 document.addEventListener('pointerdown', e => {
@@ -1437,7 +1448,7 @@ let ultimaCarga = Date.now();
 // No se recarga la pantalla si estás escribiendo, con un formulario abierto o confirmando algo
 function estaOcupado(){
   return !!(S.gastoForm || S.billForm || S.editBill || S.editItem || S.normaForm || S.avisoForm || S.echar || S.saldar ||
-    S.movDel || S.gastoEdit || S.billDel || S.normaDel || S.avisoDel || S.precioItem ||
+    S.movDel || S.gastoEdit || S.billDel || S.normaDel || S.avisoDel || S.precioItem || S.compraPrecio ||
     (document.activeElement && document.activeElement.matches && document.activeElement.matches('input,textarea,select')));
 }
 /* ---------- Cambios en directo (Supabase Realtime) ----------
@@ -1485,7 +1496,7 @@ window.addEventListener('pageshow', e => { if (e.persisted){ ultimaCarga = 0; re
 function renderNav(){
   $('#navIn').innerHTML = TABS.map(([k,l]) => `<button data-tab="${k}" ${S.tab===k?'aria-current="page"':''}>${k === 'facturas' ? `<span class="eur" aria-hidden="true">€</span>${l}` : l}</button>`).join('');
   document.body.dataset.tab = S.tab;
-  $('#navIn').querySelectorAll('button').forEach(b => b.onclick = () => { S.tab = b.dataset.tab; S.editItem = null; S.editBill = null; S.normaForm = null; S.normaDel = null; S.avisoForm = false; S.avisoDel = null; S.gastoForm = false; S.gastoEdit = null; S.gastoTipo = null; S.gastoDel = null; S.echar = null; S.admin = null; S.saldar = null; S.movDel = null; S.billForm = false; S.precioItem = null; S.histTodo = false; render(); window.scrollTo(0,0); });
+  $('#navIn').querySelectorAll('button').forEach(b => b.onclick = () => { S.tab = b.dataset.tab; S.editItem = null; S.editBill = null; S.normaForm = null; S.normaDel = null; S.avisoForm = false; S.avisoDel = null; S.gastoForm = false; S.gastoEdit = null; S.gastoTipo = null; S.gastoDel = null; S.echar = null; S.admin = null; S.saldar = null; S.movDel = null; S.billForm = false; S.precioItem = null; S.compraPrecio = null; S.histTodo = false; render(); window.scrollTo(0,0); });
 }
 async function render(){
   // El directo es un extra: si el navegador bloquea la conexión (Firefox lanza el error al momento), la app sigue funcionando.
@@ -2281,6 +2292,13 @@ function precioCompra(i){
   return `<br><button type="button" class="link" data-precio-abrir="${esc(i.id)}" style="min-height:36px">¿Cuánto costó? Anótalo como gasto</button>`;
 }
 function filaCompra(i){
+  if (!i.is_bought && S.compraPrecio === i.id) return `
+    <li style="display:block" data-busca="${esc(norm(i.name + ' ' + (i.running_low ? 'se acaba' : '')))}"><span class="name">${esc(i.name)}</span>
+      <form class="precio" data-compra="${esc(i.id)}" novalidate>
+        <input id="compraIn" type="number" inputmode="decimal" min="0.01" step="0.01" placeholder="Precio €" aria-label="Lo que costó ${esc(i.name)}">
+        <button class="btn small" type="submit">Comprado</button><button class="btn ghost small" type="button" data-compra-no>Cancelar</button>
+        <small class="dim" style="flex-basis:100%">Si pones el precio se anota como gasto entre todos. Si lo dejas vacío, solo se tacha.</small>
+        <small class="err" id="eCompra" role="alert" hidden style="flex-basis:100%"></small></form></li>`;
   if (S.editItem === i.id) return `
     <li style="display:block"><form class="row grow" data-edit="${esc(i.id)}" style="flex-wrap:wrap">
       <input id="editName" style="flex:1 1 100%" maxlength="80" value="${esc(i.name)}" aria-label="Nuevo nombre de ${esc(i.name)}" required>
@@ -2326,6 +2344,20 @@ async function renderCompra(){
   }
   const bloque = (et, lista) => `<div class="day">${esc(et)} <span class="n">${lista.length}</span></div>
     <ul class="list">${lista.map(filaCompra).join('')}</ul>`;
+  // Ya comprado: lo que compraste tú y lo que compraron los demás, por días, con lo gastado (solo cuenta lo que tiene precio anotado)
+  const importe = i => i.expense && !i.expense.deleted_at ? Number(i.expense.amount) || 0 : 0;
+  const suma = l => Math.round(l.reduce((a, i) => a + importe(i), 0) * 100) / 100;
+  const sinPrecio = l => l.filter(i => !importe(i)).length;
+  const mios = comprados.filter(i => i.bought_by === S.api.uid), otros = comprados.filter(i => i.bought_by !== S.api.uid);
+  const porDias = lista => { const g = []; for (const i of lista){ const et = dayLabel(i.bought_at), x = g.find(y => y.et === et); if (x) x.items.push(i); else g.push({et, items:[i]}); } return g; };
+  const bloqueHecho = (et, lista) => `<div class="day">${esc(et)} <span class="n">${lista.length}</span><span class="tot">${eur(suma(lista))}</span></div>
+    <ul class="list">${lista.map(filaCompra).join('')}</ul>`;
+  const seccionHecha = (titulo, lista) => lista.length ? `<h3 class="wk">${titulo} <span class="n small dim">${lista.length} · ${eur(suma(lista))}</span></h3>${porDias(lista).map(d => bloqueHecho(d.et, d.items)).join('')}` : '';
+  const resumenHechos = comprados.length ? `<div class="resumen" aria-label="Lo gastado en compra">
+      <div class="mio"><b>Tú</b><span class="v">${eur(suma(mios))}</span><small>${mios.length} ${mios.length === 1 ? 'producto' : 'productos'}</small></div>
+      <div><b>Compañeros</b><span class="v">${eur(suma(otros))}</span><small>${otros.length} ${otros.length === 1 ? 'producto' : 'productos'}</small></div>
+      <div class="full"><b>Total</b><span class="v">${eur(suma(comprados))}</span><small>${comprados.length} ${comprados.length === 1 ? 'producto' : 'productos'}</small></div></div>
+    ${sinPrecio(comprados) ? `<p class="small dim" style="margin:2px 2px 0">Los totales solo suman lo que tiene el precio anotado (${sinPrecio(comprados)} sin precio).</p>` : ''}` : '';
 
   app.innerHTML = `${header('Compra común')}${subtabsHtml('compra', {pend:pend.length, hechos:comprados.length})}
     <section class="sec">
@@ -2345,7 +2377,7 @@ async function renderCompra(){
       </div>
       <div data-g="hechos">
       <div class="sec-head"><h2>Ya comprado</h2><span class="count">${comprados.length}</span></div>
-      ${comprados.length ? `<ul class="list">${comprados.map(filaCompra).join('')}</ul>` + '<p class="small dim" style="margin:6px 2px 0">Si tachaste algo por error, vuelve a pulsarlo y regresa a «Por comprar». Si lo compraste tú, puedes anotar lo que costó; si lo destachas o lo quitas, ese gasto se elimina.</p>'
+      ${comprados.length ? resumenHechos + seccionHecha('Comprado por mí', mios) + seccionHecha('Comprado por los compañeros', otros) + '<p class="small dim" style="margin:6px 2px 0">Si tachaste algo por error, vuelve a pulsarlo y regresa a «Por comprar». Si lo compraste tú, puedes anotar lo que costó; si lo destachas o lo quitas, ese gasto se elimina.</p>'
         : '<p class="empty">Todavía no se ha tachado nada.</p>'}
       </div>
     </section>`;
@@ -2358,7 +2390,9 @@ async function renderCompra(){
   // si tenía su gasto anotado, al destacharlo o quitarlo se elimina ese gasto (nadie sigue debiendo por él)
   const conGasto = idi => { const it = items.find(x => x.id === idi); return it && it.expense && !it.expense.deleted_at ? it : null; };
   app.querySelectorAll('[data-b]').forEach(b => b.onclick = async () => {
-    if (b.disabled) return; b.disabled = true;
+    if (b.disabled) return;
+    if (b.getAttribute('aria-pressed') !== 'true'){ S.compraPrecio = b.dataset.b; S.editItem = null; await renderCompra(); $('#compraIn')?.focus(); return; }   // al tachar, se puede poner el precio
+    b.disabled = true;
     const it = b.getAttribute('aria-pressed') === 'true' ? conGasto(b.dataset.b) : null;
     const baja = b.getAttribute('aria-pressed') !== 'true' ? items.find(x => x.id === b.dataset.b && x.running_low) : null;
     try{ await S.api.setBought(b.dataset.b, b.getAttribute('aria-pressed') !== 'true');
@@ -2383,6 +2417,27 @@ async function renderCompra(){
     const it = conGasto(b.dataset.d);
     try{ await S.api.delItem(b.dataset.d); if (it) toast(`Quitado. También se ha eliminado su gasto de ${eur(it.expense.amount)}.`); await renderCompra(); }catch(err){ toast(friendly(err)); }
   });
+  app.querySelectorAll('[data-compra-no]').forEach(b => b.onclick = async () => { S.compraPrecio = null; await renderCompra(); });
+  const fc = app.querySelector('form[data-compra]');
+  if (fc){
+    const entrada = $('#compraIn'); entrada.addEventListener('input', () => { const er = $('#eCompra'); er.hidden = true; });
+    fc.onsubmit = async e => {
+      e.preventDefault();
+      const txt = entrada.value.trim().replace(',', '.'), idc = fc.dataset.compra;
+      const it = items.find(x => x.id === idc), baja = it && it.running_low;
+      const btn = fc.querySelector('button[type=submit]');
+      if (txt === ''){
+        btn.disabled = true;
+        try{ await S.api.setBought(idc, true); S.compraPrecio = null; if (baja) toast(`Repuesto: «${it.name}» ya no está marcado como que se acaba.`); }catch(err){ btn.disabled = false; toast(friendly(err)); }
+        await renderCompra(); return;
+      }
+      const amount = Math.round(parseFloat(txt) * 100) / 100;
+      if (!(amount > 0)){ const er = $('#eCompra'); er.textContent = 'Indica lo que costó (más de 0 €) o déjalo vacío.'; er.hidden = false; entrada.focus(); return; }
+      btn.disabled = true;
+      try{ await S.api.buyItemWithExpense(idc, amount); S.compraPrecio = null; toast(`Comprado y gasto anotado: ${eur(amount)} entre ${S.members.length}. Lo verás en Gastos.`); await renderCompra(); }
+      catch(err){ btn.disabled = false; toast(friendly(err)); }
+    };
+  }
   app.querySelectorAll('[data-precio-abrir]').forEach(b => b.onclick = async () => { S.precioItem = b.dataset.precioAbrir; await renderCompra(); $('#precioIn')?.focus(); });
   app.querySelectorAll('[data-precio-no]').forEach(b => b.onclick = async () => { S.precioItem = null; await renderCompra(); });
   const fp = app.querySelector('form[data-precio]');
@@ -2748,7 +2803,48 @@ function movimientosHtml(mov){
   </section>`;
 }
 
-function facturasHtml(bills, pagos){
+// Resumen del mes en curso: lo que hay que pagar en total, lo que ya has pagado tú y lo que te queda.
+// Cuenta los vencimientos del mes ya creados (gastos) y los que aún no han vencido; las facturas en pausa no cuentan.
+function sumaFrecuencia(iso, freq){
+  const [y, m, d] = iso.split('-').map(Number), meses = {monthly:1, bimonthly:2, quarterly:3, yearly:12}[freq];
+  if (!meses){ const t = new Date(y, m - 1, d + 7); return `${t.getFullYear()}-${String(t.getMonth()+1).padStart(2,'0')}-${String(t.getDate()).padStart(2,'0')}`; }
+  const base = new Date(y, m - 1 + meses, 1), fin = new Date(base.getFullYear(), base.getMonth() + 1, 0).getDate();
+  return `${base.getFullYear()}-${String(base.getMonth()+1).padStart(2,'0')}-${String(Math.min(d, fin)).padStart(2,'0')}`;
+}
+function resumenMes(bills, pagos, gastos){
+  const n = Math.max(S.members.length, 1), yo = S.api.uid, h = new Date();
+  const ym = `${h.getFullYear()}-${String(h.getMonth()+1).padStart(2,'0')}`;
+  const occ = [];
+  for (const g of gastos) if (String(g.date).slice(0, 7) === ym){
+    const mia = (g.shares || []).find(x => x.user_id === yo);
+    occ.push({bill:g.bill_id, due:g.date, total:Number(g.amount), parte: mia ? mia.amount : Math.round(Number(g.amount) / n * 100) / 100, adelanta:g.paid_by === yo});
+  }
+  for (const b of bills){
+    if (b.is_paused) continue;
+    let d = b.next_due_date, k = 0;
+    while (d.slice(0, 7) <= ym && k++ < 40){
+      if (d.slice(0, 7) === ym && !occ.some(o => o.bill === b.id && o.due === d))
+        occ.push({bill:b.id, due:d, total:Number(b.amount), parte:Math.round(Number(b.amount) / n * 100) / 100, adelanta:b.paid_by === yo});
+      d = sumaFrecuencia(d, b.frequency);
+    }
+  }
+  let total = 0, mio = 0, pagado = 0;
+  for (const o of occ){
+    total += o.total; mio += o.parte;
+    if (o.adelanta || pagos.some(p => p.bill_id === o.bill && p.due_date === o.due && p.user_id === yo)) pagado += o.parte;
+  }
+  const r = x => Math.round(x * 100) / 100;
+  return {n:occ.length, total:r(total), mio:r(mio), pagado:r(pagado), queda:r(Math.max(mio - pagado, 0)), mes:h.toLocaleDateString('es-ES', {month:'long'})};
+}
+function resumenMesHtml(bills, pagos, gastos){
+  const r = resumenMes(bills, pagos, gastos);
+  if (!r.n) return `<p class="small dim" style="margin:2px 2px 0">Este mes (${esc(r.mes)}) no hay facturas por pagar.</p>`;
+  return `<div class="resumen mes" aria-label="Facturas de ${esc(r.mes)}">
+    <div class="queda ${r.queda < 0.005 ? 'cero' : ''}"><b>Te queda por pagar</b><span class="v">${eur(r.queda)}</span><small>de tu parte de ${esc(r.mes)}</small></div>
+    <div><b>Ya pagado</b><span class="v">${eur(r.pagado)}</span><small>tu parte</small></div>
+    <div class="full"><b>A pagar en ${esc(r.mes)}, en total</b><span class="v">${eur(r.total)}</span><small>${r.n} ${r.n === 1 ? 'factura' : 'facturas'} entre todos · tu parte ${eur(r.mio)}. Si adelantas tú una factura, tu parte cuenta como pagada.</small></div></div>`;
+}
+function facturasHtml(bills, pagos, gastos = []){
   const n = Math.max(S.members.length, 1), yo = S.api.uid;
   const who = id => S.members.find(m => m.id === id)?.name || 'un antiguo compañero';
   const ed = S.editBill ? bills.find(b => b.id === S.editBill) : null;
@@ -2800,6 +2896,7 @@ function facturasHtml(bills, pagos){
   return `<section class="sec" id="facts">
     <div class="sec-head"><h2>Facturas periódicas</h2><span class="count">${bills.length}</span></div>
     <p class="sub">Se repiten solas. El día que vencen se crea su gasto en Movimientos, repartido entre los ${n === 1 ? 'del piso' : n + ' compañeros'}.</p>
+    ${resumenMesHtml(bills, pagos, gastos)}
     <ul class="list receipt">${bills.length ? bills.map(fila).join('') : '<li class="empty">Todavía no hay facturas. Da de alta la luz, el agua o el internet y se repetirán solas.</li>'}</ul>
     ${form}
   </section>`;
@@ -2826,7 +2923,7 @@ async function renderFacturas(){
     ...gastos.map(g => ({tipo:'factura', key:'f:' + g.id, date:g.date, ts:g.date + '|', g, pagos})),
     ...pays.map(p => { const d = iso(new Date(p.paid_at)); return {tipo:'pago', key:'p:' + p.id, id:p.id, date:d, ts:d + '|' + p.paid_at, from:p.from_user, to:p.to_user, amount:Number(p.amount), created_by:p.created_by}; })
   ].sort((a,b) => b.ts.localeCompare(a.ts));
-  app.innerHTML = `${header('Gastos y facturas')}${subtabsHtml('facturas', {movs:mov.length, facts:bills.length})}${saldosHtml(bal)}${movimientosHtml(mov)}${facturasHtml(bills, pagos)}`;
+  app.innerHTML = `${header('Gastos y facturas')}${subtabsHtml('facturas', {movs:mov.length, facts:bills.length})}${saldosHtml(bal)}${movimientosHtml(mov)}${facturasHtml(bills, pagos, gastos)}`;
   aplicarSub('facturas');
   bindGastos(bills, mov);
 }
