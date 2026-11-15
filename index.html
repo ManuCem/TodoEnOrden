@@ -846,8 +846,8 @@ function demoApi(clave){
     if (!db.members.some(m => m.id === g.paid_by)) return 'El pagador no pertenece al piso';
     if (!g.split || g.split === 'equal') return repartir(g.amount, g.participants);
     if (g.split === 'exact') return g.participants.map((u,i) => ({user_id:u, amount:g.values[i]}));
-    const sh = g.participants.map((u,i) => ({user_id:u, amount:Math.round(g.amount*g.values[i])/100, percentage:g.values[i]}));
-    const dif = Math.round((g.amount - sh.reduce((s,x) => s + x.amount, 0))*100)/100; sh[0].amount = Math.round((sh[0].amount + dif)*100)/100; return sh;
+    const partes = repartoPorcentajes(g.amount, g.values);
+    return g.participants.map((u,i) => ({user_id:u, amount:partes[i], percentage:g.values[i]}));
   };
   // Compra con precio: al quitarla o destacharla se borra su gasto (solo quien lo pagó)
   const quitarGastoCompra = x => { const g = x.expense_id && db.manual.find(y => y.id === x.expense_id); if (!g) return null;
@@ -2585,11 +2585,22 @@ function saldosHtml(bal){
   </section>`;
 }
 
+const nombreMiembro = u => (S.members.find(m => m.id === u) || {}).name || 'alguien';
 const TIPO_REPARTO = {equal:'A partes iguales', exact:'Por importes', percentage:'Por porcentajes'};
 // Parte de cada uno al céntimo: 10 € entre 3 → 3,34 · 3,33 · 3,33 (la suma da siempre el total)
 function repartoIgual(total, n){
   const c = Math.round(total * 100), base = Math.floor(c / n), resto = c - base * n;
   return Array.from({length:n}, (_, i) => (base + (i < resto ? 1 : 0)) / 100);
+}
+// TEO-32: reparto por porcentajes al céntimo, igual que la base de datos (método del resto mayor):
+// cada uno paga los céntimos enteros de su porcentaje y los que faltan van a quien tenga mayor resto (empate: el primero)
+function repartoPorcentajes(total, pcts){
+  const c = Math.round(total * 100), pm = pcts.map(p => Math.round(p * 1000));   // porcentaje en milésimas, entero
+  const base = pm.map(m => Math.floor(c * m / 100000)), resto = pm.map((m, i) => (c * m) % 100000);
+  let faltan = c - base.reduce((a, b) => a + b, 0);
+  const orden = pm.map((_, i) => i).sort((a, b) => resto[b] - resto[a] || a - b);
+  orden.forEach(i => { if (faltan > 0){ base[i] += 1; faltan--; } });
+  return base.map(v => v / 100);
 }
 function formGastoHtml(){
   // S.gastoEdit: el gasto que se está editando (mismo formulario, ya relleno)
@@ -2642,6 +2653,9 @@ function movimientosHtml(mov){
       return `<span class="state">${n} → ${esc(acreedor)} ${cant}</span>`;
     }).join('')}</span>`;
   };
+  // TEO-32: quien se ha dejado fuera de un gasto no le debe nada: se dice claro
+  const noParticipa = g => { const fuera = S.members.filter(m => !g.shares.some(x => x.user_id === m.id));
+    return g.shares.length && fuera.length ? `<span class="meta-line small dim">No participa: ${fuera.map(m => esc(m.id === yo ? 'tú' : m.name)).join(', ')}</span>` : ''; };
   const irSaldos = g => g.shares.some(x => x.user_id !== g.paid_by) && (g.paid_by === yo || g.shares.some(x => x.user_id === yo))
     ? `<p class="small dim" style="margin:6px 0 0;line-height:1.5">Se paga todo junto en <button type="button" class="link" style="display:inline;padding:0;min-height:0" data-go="facturas" data-subgo="saldos">Saldos</button>, sin ir gasto por gasto.</p>` : '';
   const borrar = (m, tipoTxt, editarId) => S.movDel === m.key ? `<div class="confirm" role="alertdialog" aria-label="Confirmar">
@@ -2672,6 +2686,7 @@ function movimientosHtml(mov){
         <span class="small dim">${esc(fmtDate(g.date))} · ${g.paid_by === yo ? 'pagaste tú' : 'pagó ' + esc(nombreDe(g.paid_by))}</span></span>
         <span class="right"><span class="amount">${eur(g.amount)}</span><span class="small dim">${resumen}</span></span></span>
       ${chipsReparto(g, u => u === g.paid_by)}
+      ${noParticipa(g)}
       ${irSaldos(g)}
       ${g.created_by === yo || g.paid_by === yo ? borrar(m, `Eliminar «${esc(g.name)}» (${eur(g.amount)})`, g.id) : ''}</li>`;
   };
@@ -2852,7 +2867,16 @@ function bindFormGasto(){
     else {
       const sum = on.reduce((s, x) => s + (parseFloat(x.val.value) || 0), 0);
       if (t === 'exact') txt = a > 0 ? (Math.abs(sum - a) < 0.005 ? `Cuadra: ${eur(sum)} de ${eur(a)}.` : sum < a ? `Faltan ${eur(a - sum)} por repartir.` : `Te pasas en ${eur(sum - a)}.`) : `Repartido: ${eur(sum)}.`;
-      else txt = Math.abs(sum - 100) < 0.001 ? 'Cuadra: 100 %.' : `Suman ${Math.round(sum*100)/100} % (tienen que sumar 100 %).`;
+      else if (Math.abs(sum - 100) < 0.001){
+        txt = 'Cuadra: 100 %.';
+        if (a > 0 && on.every(x => parseFloat(x.val.value) >= 0)){   // TEO-32: lo que paga cada uno, igual que se guardará
+          const partes = repartoPorcentajes(a, on.map(x => parseFloat(x.val.value) || 0));
+          txt += ' ' + on.map((x, i) => `${nombreMiembro(x.u)} ${eur(partes[i])}`).join(' · ') + '.';
+        }
+      }
+      else txt = `Suman ${Math.round(sum*100)/100} % (tienen que sumar 100 %).`;
+      const fuera = filas().filter(x => !x.on).map(x => nombreMiembro(x.u));
+      if (on.length && fuera.length) txt += ` No participa: ${fuera.join(', ')}.`;
     }
     $('#gPreview').textContent = txt;
   };
