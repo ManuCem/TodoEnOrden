@@ -624,6 +624,8 @@ function remoteApi(sb, uid){
     },
     // Echar a alguien del piso (cualquier miembro, menos a sí mismo y al admin; lo comprueba Supabase)
     async removeMember(aptId, userId){ ok(await sb.rpc('remove_member', {p_apartment_id:aptId, p_user_id:userId})); },
+    // Pasar el cargo de admin a otra persona del piso sin salirse (solo lo puede hacer el admin actual; lo comprueba Supabase)
+    async transferOwner(aptId, userId){ ok(await sb.rpc('transfer_ownership', {p_apartment_id:aptId, p_new_owner:userId})); },
     async balances(aptId){
       const rows = ok(await sb.from('apartment_balances').select('user_id,balance').eq('apartment_id', aptId));
       return Object.fromEntries((rows || []).map(r => [r.user_id, Number(r.balance)]));
@@ -822,7 +824,7 @@ function demoApi(clave){
   const me = uid(0);
   const db = {
     myName: P.miembros[0],
-    apt: { id:'apt-'+pisoDemo, name:P.nombre, invite_code:P.code },
+    apt: { id:'apt-'+pisoDemo, name:P.nombre, invite_code:P.code, owner_id:me },
     members: P.miembros.map((n,i) => ({ id:uid(i), name:n })),
     items: P.compra.map(([name,b,dias,quien,precio,bajo],i) => ({ id:'i'+i, name, is_bought:!!b, running_low: !b && !!bajo, low_by: !b && bajo ? uid((i+1) % P.miembros.length) : null, low_at: !b && bajo ? new Date(Date.now()-(dias||0)*864e5 - 36e5).toISOString() : null, created_at:new Date(Date.now()-(dias||0)*864e5 - (i%5)*36e5).toISOString(), precio: b && precio ? precio : null,
       bought_by: b ? uid(quien ?? (i % P.miembros.length)) : null, bought_at: b ? new Date(Math.min(Date.now()-6e5, Date.now()-(dias||0)*864e5 - i*36e5 + 72e5)).toISOString() : null })),
@@ -970,6 +972,9 @@ function demoApi(clave){
     apartment:()=>wait(db.apt), apartments:()=>wait(db.apt ? [db.apt] : []), createApartment:n=>{ db.apt={id:'apt-nuevo',name:n,invite_code:'M4R7TA'}; return wait(); },
     joinApartment:c=>{ const ok = Object.values(PISOS).some(p => p.code === c.toUpperCase()) || c.toUpperCase()===(db.apt?.invite_code||''); return ok ? wait() : Promise.reject(new Error('Código de piso no válido')); },
     members:()=>wait(db.members.slice()),
+    transferOwner:(a, idu)=>{ if (db.apt.owner_id !== me) return Promise.reject(new Error('Solo el admin del piso puede cambiar de admin'));
+      if (!db.members.some(m => m.id === idu) || idu === me) return Promise.reject(new Error('Elige a otra persona del piso como admin'));
+      db.apt.owner_id = idu; return wait(); },
     removeMember:(a, idu)=>{ if (idu === me) return Promise.reject(new Error('No puedes echarte a ti: usa «Salir del piso»'));
       const k = db.members.findIndex(m => m.id === idu); if (k < 0) return Promise.reject(new Error('Esa persona ya no está en el piso'));
       db.members.splice(k,1); return wait(); },
@@ -1393,7 +1398,7 @@ app.addEventListener('click', async e => {
   if (e.target.closest('[data-logout]')){ await S.sb.auth.signOut(); S.tab = 'facturas'; await boot(false); return; }
   const g = e.target.closest('[data-go]'); if (!g) return;
   if (g.dataset.subgo){ S.sub = S.sub || {}; S.sub[g.dataset.go] = g.dataset.subgo; }
-  S.tab = g.dataset.go; S.editItem = null; S.editBill = null; S.normaForm = null; S.normaDel = null; S.avisoForm = false; S.avisoDel = null; S.gastoForm = false; S.gastoEdit = null; S.gastoTipo = null; S.gastoDel = null; S.echar = null; S.saldar = null; S.movDel = null; S.billForm = false; S.precioItem = null; S.histTodo = false; render(); window.scrollTo(0,0);
+  S.tab = g.dataset.go; S.editItem = null; S.editBill = null; S.normaForm = null; S.normaDel = null; S.avisoForm = false; S.avisoDel = null; S.gastoForm = false; S.gastoEdit = null; S.gastoTipo = null; S.gastoDel = null; S.echar = null; S.admin = null; S.saldar = null; S.movDel = null; S.billForm = false; S.precioItem = null; S.histTodo = false; render(); window.scrollTo(0,0);
 });
 /* Animaciones: onda al pulsar y entrada al cambiar de pestaña */
 document.addEventListener('pointerdown', e => {
@@ -1451,6 +1456,7 @@ function conectarDirecto(){
   // Los borrados no se pueden filtrar por piso (solo traen el id): ante cualquiera, se refresca
   ['shopping_items','payments','bulletin_notices','house_rules','recurring_bills','cleaning_zones','apartment_members'].forEach(t =>
     ch.on('postgres_changes', {event:'DELETE', schema:'public', table:t}, cambioEnDirecto));
+  ch.on('postgres_changes', {event:'UPDATE', schema:'public', table:'apartments', filter:'id=eq.' + apt}, () => { rtMiembros = true; cambioEnDirecto(); });   // cambio de admin o de nombre
   ch.subscribe(st => { S.directo = st === 'SUBSCRIBED'; });   // el estado de la cabecera siempre dice «Conectado»: así no parpadea al cambiar de piso
   ch.aptId = apt; canal = ch;
 }
@@ -1479,7 +1485,7 @@ window.addEventListener('pageshow', e => { if (e.persisted){ ultimaCarga = 0; re
 function renderNav(){
   $('#navIn').innerHTML = TABS.map(([k,l]) => `<button data-tab="${k}" ${S.tab===k?'aria-current="page"':''}>${k === 'facturas' ? `<span class="eur" aria-hidden="true">€</span>${l}` : l}</button>`).join('');
   document.body.dataset.tab = S.tab;
-  $('#navIn').querySelectorAll('button').forEach(b => b.onclick = () => { S.tab = b.dataset.tab; S.editItem = null; S.editBill = null; S.normaForm = null; S.normaDel = null; S.avisoForm = false; S.avisoDel = null; S.gastoForm = false; S.gastoEdit = null; S.gastoTipo = null; S.gastoDel = null; S.echar = null; S.saldar = null; S.movDel = null; S.billForm = false; S.precioItem = null; S.histTodo = false; render(); window.scrollTo(0,0); });
+  $('#navIn').querySelectorAll('button').forEach(b => b.onclick = () => { S.tab = b.dataset.tab; S.editItem = null; S.editBill = null; S.normaForm = null; S.normaDel = null; S.avisoForm = false; S.avisoDel = null; S.gastoForm = false; S.gastoEdit = null; S.gastoTipo = null; S.gastoDel = null; S.echar = null; S.admin = null; S.saldar = null; S.movDel = null; S.billForm = false; S.precioItem = null; S.histTodo = false; render(); window.scrollTo(0,0); });
 }
 async function render(){
   // El directo es un extra: si el navegador bloquea la conexión (Firefox lanza el error al momento), la app sigue funcionando.
@@ -2155,12 +2161,17 @@ async function renderPiso(){
       <div class="sec-head"><h2>Compañeros</h2><span class="count">${S.members.length}</span></div>
       <ul class="list">${S.members.map(m => {
         const puedeEchar = m.id !== S.api.uid && m.id !== apt.owner_id;
+        const puedeAdmin = !!apt.owner_id && apt.owner_id === S.api.uid && m.id !== S.api.uid;   // solo el admin puede pasar el cargo
         const saldo = S.echar === m.id && S.echarSaldo ? S.echarSaldo[m.id] || 0 : 0;
         return `
         <li style="flex-wrap:wrap"><span class="mag-dot mag ${mc(m.id)}">${dotInner(m)}</span>
           <span class="grow name">${esc(m.name)}</span>
           ${apt.owner_id && m.id === apt.owner_id ? '<span class="you">Admin</span>' : ''}
           ${m.id===S.api.uid ? '<span class="you">Tú</span>' : ''}
+          ${puedeAdmin && S.admin !== m.id ? `<button type="button" class="link" data-admin="${esc(m.id)}" aria-label="Hacer admin a ${esc(m.name)}">Hacer admin</button>` : ''}
+          ${puedeAdmin && S.admin === m.id ? `<div class="confirm" role="alertdialog" aria-label="Confirmar nuevo admin" style="flex-basis:100%">
+            <span>¿Hacer admin a <b>${esc(m.name)}</b>? Podrá eliminar el piso para todos y nadie podrá echarle. <b>Tú seguirás en el piso como un compañero más</b>, pero dejarás de ser admin y solo ${esc(m.name)} podría devolverte el cargo.</span>
+            <span class="row"><button class="btn small" data-admin-ok="${esc(m.id)}">Sí, hacer admin</button><button class="btn small ghost" data-admin-no>Cancelar</button></span></div>` : ''}
           ${puedeEchar && S.echar !== m.id ? `<button type="button" class="link" data-echar="${esc(m.id)}" aria-label="Echar a ${esc(m.name)} del piso">Echar</button>` : ''}
           ${puedeEchar && S.echar === m.id ? `<div class="confirm" role="alertdialog" aria-label="Confirmar" style="flex-basis:100%">
             <span>¿Echar a <b>${esc(m.name)}</b> del piso? Dejará de verlo y sus turnos de limpieza pendientes pasarán a otros.${
@@ -2168,13 +2179,22 @@ async function renderPiso(){
               Si conserva el código del piso, podría volver a unirse.</span>
             <span class="row"><button class="btn small danger" data-echar-ok="${esc(m.id)}">Sí, echar</button><button class="btn small ghost" data-echar-no>Cancelar</button></span></div>` : ''}
         </li>`; }).join('')}</ul>
-      ${S.members.length > 1 ? `<p class="small dim" style="margin:8px 2px 0">Cualquiera del piso puede echar a otro compañero${apt.owner_id ? ', menos al admin' : ''}.</p>` : ''}
+      ${S.members.length > 1 ? `<p class="small dim" style="margin:8px 2px 0">Cualquiera del piso puede echar a otro compañero${apt.owner_id ? ', menos al admin' : ''}.${apt.owner_id && apt.owner_id === S.api.uid ? ' Tú, que eres admin, puedes pasar el cargo a otra persona con «Hacer admin».' : ''}</p>` : ''}
     </section>
     ${ajustesPisoHtml(apt)}`;
   bindAjustesPiso(apt);
   aplicarSub('piso');
+  app.querySelectorAll('[data-admin]').forEach(b => b.onclick = async () => { S.admin = b.dataset.admin; S.echar = null; await renderPiso(); });
+  app.querySelectorAll('[data-admin-no]').forEach(b => b.onclick = async () => { S.admin = null; await renderPiso(); });
+  app.querySelectorAll('[data-admin-ok]').forEach(b => b.onclick = async () => {
+    b.disabled = true;
+    const quien = S.members.find(m => m.id === b.dataset.adminOk)?.name || 'Esa persona';
+    try{ await S.api.transferOwner(apt.id, b.dataset.adminOk); S.admin = null; await refreshApt(); toast(`${quien} es ahora el admin del piso. Tú sigues en el piso como compañero.`); }
+    catch(err){ S.admin = null; toast(friendly(err)); }
+    await renderPiso();
+  });
   app.querySelectorAll('[data-echar]').forEach(b => b.onclick = async () => {
-    S.echar = b.dataset.echar; S.echarSaldo = null;
+    S.echar = b.dataset.echar; S.admin = null; S.echarSaldo = null;
     try{ S.echarSaldo = await S.api.balances(apt.id); }catch{}
     await renderPiso();
   });
