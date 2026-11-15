@@ -972,8 +972,8 @@ function demoApi(clave){
     apartment:()=>wait(db.apt), apartments:()=>wait(db.apt ? [db.apt] : []), createApartment:n=>{ db.apt={id:'apt-nuevo',name:n,invite_code:'M4R7TA'}; return wait(); },
     joinApartment:c=>{ const ok = Object.values(PISOS).some(p => p.code === c.toUpperCase()) || c.toUpperCase()===(db.apt?.invite_code||''); return ok ? wait() : Promise.reject(new Error('Código de piso no válido')); },
     members:()=>wait(db.members.slice()),
-    transferOwner:(a, idu)=>{ if (db.apt.owner_id !== me) return Promise.reject(new Error('Solo el admin del piso puede cambiar de admin'));
-      if (!db.members.some(m => m.id === idu) || idu === me) return Promise.reject(new Error('Elige a otra persona del piso como admin'));
+    transferOwner:(a, idu)=>{
+      if (!db.members.some(m => m.id === idu) || idu === db.apt.owner_id) return Promise.reject(new Error('Elige a otra persona del piso como admin'));
       db.apt.owner_id = idu; return wait(); },
     removeMember:(a, idu)=>{ if (idu === me) return Promise.reject(new Error('No puedes echarte a ti: usa «Salir del piso»'));
       const k = db.members.findIndex(m => m.id === idu); if (k < 0) return Promise.reject(new Error('Esa persona ya no está en el piso'));
@@ -2161,17 +2161,18 @@ async function renderPiso(){
       <div class="sec-head"><h2>Compañeros</h2><span class="count">${S.members.length}</span></div>
       <ul class="list">${S.members.map(m => {
         const puedeEchar = m.id !== S.api.uid && m.id !== apt.owner_id;
-        const puedeAdmin = !!apt.owner_id && apt.owner_id === S.api.uid && m.id !== S.api.uid;   // solo el admin puede pasar el cargo
+        const puedeAdmin = m.id !== apt.owner_id;   // cualquiera del piso puede dar el cargo de admin (o quedárselo)
+        const yoMismo = m.id === S.api.uid;
         const saldo = S.echar === m.id && S.echarSaldo ? S.echarSaldo[m.id] || 0 : 0;
         return `
         <li style="flex-wrap:wrap"><span class="mag-dot mag ${mc(m.id)}">${dotInner(m)}</span>
           <span class="grow name">${esc(m.name)}</span>
           ${apt.owner_id && m.id === apt.owner_id ? '<span class="you">Admin</span>' : ''}
           ${m.id===S.api.uid ? '<span class="you">Tú</span>' : ''}
-          ${puedeAdmin && S.admin !== m.id ? `<button type="button" class="link" data-admin="${esc(m.id)}" aria-label="Hacer admin a ${esc(m.name)}">Hacer admin</button>` : ''}
+          ${puedeAdmin && S.admin !== m.id ? `<button type="button" class="link" data-admin="${esc(m.id)}" aria-label="${yoMismo ? 'Hacerme admin' : 'Hacer admin a ' + esc(m.name)}">${yoMismo ? 'Hacerme admin' : 'Hacer admin'}</button>` : ''}
           ${puedeAdmin && S.admin === m.id ? `<div class="confirm" role="alertdialog" aria-label="Confirmar nuevo admin" style="flex-basis:100%">
-            <span>¿Hacer admin a <b>${esc(m.name)}</b>? Podrá eliminar el piso para todos y nadie podrá echarle. <b>Tú seguirás en el piso como un compañero más</b>, pero dejarás de ser admin y solo ${esc(m.name)} podría devolverte el cargo.</span>
-            <span class="row"><button class="btn small" data-admin-ok="${esc(m.id)}">Sí, hacer admin</button><button class="btn small ghost" data-admin-no>Cancelar</button></span></div>` : ''}
+            <span>${yoMismo ? '¿Hacerte admin del piso?' : `¿Hacer admin a <b>${esc(m.name)}</b>?`} El admin puede eliminar el piso para todos y nadie puede echarle. ${apt.owner_id ? `<b>${esc(nombreMiembro(apt.owner_id))} seguirá en el piso como un compañero más</b>, pero dejará de ser admin y cualquiera del piso podrá devolverle el cargo.` : ''}</span>
+            <span class="row"><button class="btn small" data-admin-ok="${esc(m.id)}">${yoMismo ? 'Sí, hacerme admin' : 'Sí, hacer admin'}</button><button class="btn small ghost" data-admin-no>Cancelar</button></span></div>` : ''}
           ${puedeEchar && S.echar !== m.id ? `<button type="button" class="link" data-echar="${esc(m.id)}" aria-label="Echar a ${esc(m.name)} del piso">Echar</button>` : ''}
           ${puedeEchar && S.echar === m.id ? `<div class="confirm" role="alertdialog" aria-label="Confirmar" style="flex-basis:100%">
             <span>¿Echar a <b>${esc(m.name)}</b> del piso? Dejará de verlo y sus turnos de limpieza pendientes pasarán a otros.${
@@ -2179,7 +2180,7 @@ async function renderPiso(){
               Si conserva el código del piso, podría volver a unirse.</span>
             <span class="row"><button class="btn small danger" data-echar-ok="${esc(m.id)}">Sí, echar</button><button class="btn small ghost" data-echar-no>Cancelar</button></span></div>` : ''}
         </li>`; }).join('')}</ul>
-      ${S.members.length > 1 ? `<p class="small dim" style="margin:8px 2px 0">Cualquiera del piso puede echar a otro compañero${apt.owner_id ? ', menos al admin' : ''}.${apt.owner_id && apt.owner_id === S.api.uid ? ' Tú, que eres admin, puedes pasar el cargo a otra persona con «Hacer admin».' : ''}</p>` : ''}
+      ${S.members.length > 1 ? `<p class="small dim" style="margin:8px 2px 0">Cualquiera del piso puede echar a otro compañero${apt.owner_id ? ', menos al admin' : ''}.${apt.owner_id ? ' Cualquiera puede cambiar quién es admin con «Hacer admin».' : ''}</p>` : ''}
     </section>
     ${ajustesPisoHtml(apt)}`;
   bindAjustesPiso(apt);
@@ -2189,7 +2190,8 @@ async function renderPiso(){
   app.querySelectorAll('[data-admin-ok]').forEach(b => b.onclick = async () => {
     b.disabled = true;
     const quien = S.members.find(m => m.id === b.dataset.adminOk)?.name || 'Esa persona';
-    try{ await S.api.transferOwner(apt.id, b.dataset.adminOk); S.admin = null; await refreshApt(); toast(`${quien} es ahora el admin del piso. Tú sigues en el piso como compañero.`); }
+    const yo = b.dataset.adminOk === S.api.uid;
+    try{ await S.api.transferOwner(apt.id, b.dataset.adminOk); S.admin = null; await refreshApt(); toast(yo ? 'Ahora eres el admin del piso.' : `${quien} es ahora el admin del piso.`); }
     catch(err){ S.admin = null; toast(friendly(err)); }
     await renderPiso();
   });
