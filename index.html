@@ -2625,7 +2625,9 @@ function historicoHtml(hist, currentWeek){
   const weeks = []; hist.forEach(h => { let w = weeks.find(x => x.week === h.week); if (!w){ w = {week:h.week, rows:[]}; weeks.push(w); } w.rows.push(h); });
   const cumple = new Map();
   hist.filter(h => h.week < currentWeek).forEach(h => { const c = cumple.get(h.user_id) || {name:h.name,hechas:0,total:0}; c.total++; if (h.is_done) c.hechas++; cumple.set(h.user_id, c); });
-  const chips = [...cumple.entries()].map(([id,c]) => `<span class="chip mag ${mc(id)}">${fotoChip(id)}${esc(c.name)}: ${c.hechas} de ${c.total} (${Math.round(100*c.hechas/c.total)} %)</span>`).join('');
+  // todos los que estáis en el piso, aunque aún no tengan semanas cerradas; quien ya no está en el piso no sale
+  const chips = S.members.map(m => { const c = cumple.get(m.id);
+    return `<span class="chip mag ${mc(m.id)}">${fotoChip(m.id)}${esc(m.name)}: ${c ? `${c.hechas} de ${c.total} (${Math.round(100*c.hechas/c.total)} %)` : 'sin turnos cerrados aún'}</span>`; }).join('');
   return `<section class="sec" id="hist">
     <div class="sec-head"><h2>Histórico de limpieza</h2><button class="link" id="histRefresh">Actualizar</button></div>
     <p class="sub">Los turnos de todos los compañeros, de la semana más reciente a la más antigua.</p>
