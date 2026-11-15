@@ -628,15 +628,15 @@ function remoteApi(sb, uid){
     async createApartment(name){ ok(await sb.rpc('create_apartment',{p_name:name})); },
     async joinApartment(code){ ok(await sb.rpc('join_apartment',{p_code:code})); },
     async members(aptId){
-      const q = cols => sb.from('apartment_members').select(`user_id, created_at, profiles(${cols})`).eq('apartment_id', aptId).order('created_at');
+      const q = cols => sb.from('apartment_members').select(`user_id, created_at, is_admin, profiles(${cols})`).eq('apartment_id', aptId).order('created_at');
       let r = await q(hayFoto ? 'full_name, avatar_url' : 'full_name');
       if (r.error && hayFoto){ hayFoto = false; r = await q('full_name'); }
-      return ok(r).map(x => ({id:x.user_id, name:x.profiles?.full_name || 'Sin nombre', avatar:x.profiles?.avatar_url || ''}));
+      return ok(r).map(x => ({id:x.user_id, name:x.profiles?.full_name || 'Sin nombre', avatar:x.profiles?.avatar_url || '', admin:!!x.is_admin}));
     },
     // Echar a alguien del piso (cualquier miembro, menos a sí mismo y al admin; lo comprueba Supabase)
     async removeMember(aptId, userId){ ok(await sb.rpc('remove_member', {p_apartment_id:aptId, p_user_id:userId})); },
-    // Pasar el cargo de admin a otra persona del piso sin salirse (solo lo puede hacer el admin actual; lo comprueba Supabase)
-    async transferOwner(aptId, userId){ ok(await sb.rpc('transfer_ownership', {p_apartment_id:aptId, p_new_owner:userId})); },
+    // Admins: puede haber varios. Solo un admin nombra a otros; dejar de serlo solo lo hace uno mismo y si queda otro admin (lo comprueba Supabase)
+    async setAdmin(aptId, userId, esAdmin){ ok(await sb.rpc('set_admin', {p_apartment_id:aptId, p_user_id:userId, p_admin:esAdmin})); },
     async balances(aptId){
       const rows = ok(await sb.from('apartment_balances').select('user_id,balance').eq('apartment_id', aptId));
       return Object.fromEntries((rows || []).map(r => [r.user_id, Number(r.balance)]));
@@ -836,7 +836,7 @@ function demoApi(clave){
   const db = {
     myName: P.miembros[0],
     apt: { id:'apt-'+pisoDemo, name:P.nombre, invite_code:P.code, owner_id:me },
-    members: P.miembros.map((n,i) => ({ id:uid(i), name:n })),
+    members: P.miembros.map((n,i) => ({ id:uid(i), name:n, admin:i === 0 })),
     items: P.compra.map(([name,b,dias,quien,precio,bajo],i) => ({ id:'i'+i, name, is_bought:!!b, running_low: !b && !!bajo, low_by: !b && bajo ? uid((i+1) % P.miembros.length) : null, low_at: !b && bajo ? new Date(Date.now()-(dias||0)*864e5 - 36e5).toISOString() : null, created_at:new Date(Date.now()-(dias||0)*864e5 - (i%5)*36e5).toISOString(), precio: b && precio ? precio : null,
       bought_by: b ? uid(quien ?? (i % P.miembros.length)) : null, bought_at: b ? new Date(Math.min(Date.now()-6e5, Date.now()-(dias||0)*864e5 - i*36e5 + 72e5)).toISOString() : null })),
     zones: P.zonas.map((name,i) => ({ id:'z'+i, name })),
@@ -983,11 +983,17 @@ function demoApi(clave){
     apartment:()=>wait(db.apt), apartments:()=>wait(db.apt ? [db.apt] : []), createApartment:n=>{ db.apt={id:'apt-nuevo',name:n,invite_code:'M4R7TA'}; return wait(); },
     joinApartment:c=>{ const ok = Object.values(PISOS).some(p => p.code === c.toUpperCase()) || c.toUpperCase()===(db.apt?.invite_code||''); return ok ? wait() : Promise.reject(new Error('Código de piso no válido')); },
     members:()=>wait(db.members.slice()),
-    transferOwner:(a, idu)=>{
-      if (!db.members.some(m => m.id === idu) || idu === db.apt.owner_id) return Promise.reject(new Error('Elige a otra persona del piso como admin'));
-      db.apt.owner_id = idu; return wait(); },
+    setAdmin:(a, idu, v)=>{
+      const yo = db.members.find(m => m.id === me), x = db.members.find(m => m.id === idu);
+      if (!yo || !yo.admin) return Promise.reject(new Error('Solo un admin del piso puede cambiar los admins'));
+      if (!x) return Promise.reject(new Error('Esa persona no está en el piso'));
+      if (v){ if (x.admin) return Promise.reject(new Error('Esa persona ya es admin')); x.admin = true; return wait(); }
+      if (idu !== me) return Promise.reject(new Error('Solo puedes dejar de ser admin tú mismo; nadie puede quitárselo a otro'));
+      if (!db.members.some(m => m.admin && m.id !== me)) return Promise.reject(new Error('Eres el único admin: nombra antes a otra persona'));
+      x.admin = false; return wait(); },
     removeMember:(a, idu)=>{ if (idu === me) return Promise.reject(new Error('No puedes echarte a ti: usa «Salir del piso»'));
       const k = db.members.findIndex(m => m.id === idu); if (k < 0) return Promise.reject(new Error('Esa persona ya no está en el piso'));
+      if (db.members[k].admin) return Promise.reject(new Error('No se puede echar a un admin del piso'));
       db.members.splice(k,1); return wait(); },
     balances:()=>{
       const b = Object.fromEntries(db.members.map(m => [m.id, 0])); const add = (u, v) => { if (u in b) b[u] = Math.round((b[u] + v)*100)/100; };
@@ -1360,8 +1366,10 @@ function fotoSegura(url){
 const fotoOInicial = (url, nombre) => (url = fotoSegura(url))
   ? `<img src="${esc(url)}" alt="" referrerpolicy="no-referrer" data-i="${esc(initial(nombre))}" onerror="this.replaceWith(this.dataset.i)">`
   : esc(initial(nombre));
-// Admin = quien creó el piso (apartments.owner_id). Sin esa columna o sin dato, todos cuentan como admin (comportamiento anterior).
-const esAdmin = apt => !apt || apt.owner_id == null || apt.owner_id === S.api.uid;
+// Admins: pueden ser varios (apartment_members.is_admin). Si el piso no tuviera ninguno marcado, todos cuentan como admin (comportamiento anterior).
+const hayAdmins = () => S.members.some(m => m.admin);
+const esAdmin = () => !hayAdmins() || S.members.some(m => m.admin && m.id === S.api.uid);
+const soyUnicoAdmin = () => esAdmin() && hayAdmins() && !S.members.some(m => m.admin && m.id !== S.api.uid);
 const nombreVisible = () => S.me || S.nombreG || 'Mi cuenta';
 const avatarInner = () => fotoOInicial(S.myAvatar || S.avatar, nombreVisible());
 const dotInner = m => fotoOInicial(m.avatar, m.name);
@@ -1584,7 +1592,7 @@ function bindEditorPerfil(rerender){
 function ajustesPisoHtml(apt){
   const otros = S.members.filter(m => m.id !== S.api.uid);
   const admin = esAdmin(apt);
-  const elegir = admin && apt.owner_id && otros.length
+  const elegir = soyUnicoAdmin() && otros.length
     ? `<label style="margin:0 0 10px">Nuevo admin
         <select id="newOwner"><option value="">Elige a una persona…</option>${otros.map(m => `<option value="${esc(m.id)}">${esc(m.name)}</option>`).join('')}</select></label>` : '';
   return `<section class="sec" id="ajustes">
@@ -1609,7 +1617,7 @@ function ajustesPisoHtml(apt){
 }
 function bindAjustesPiso(apt){
   const otros = S.members.filter(m => m.id !== S.api.uid);
-  const admin = esAdmin(apt) && !!apt.owner_id;
+  const admin = soyUnicoAdmin();   // solo debo elegir sucesor si soy el único admin
   const cierra = () => { $('#leaveConfirm').hidden = true; $('#leave').hidden = false;
     if ($('#delApt')){ $('#delAptConfirm').hidden = true; $('#delApt').hidden = false; $('#delAptName').value = ''; $('#delAptYes').disabled = true; } };
   $('#leave').onclick = async () => {
@@ -1622,7 +1630,7 @@ function bindAjustesPiso(apt){
     let msg = !otros.length
       ? `<b>Eres la única persona del piso.</b> Si sales, “${esc(apt.name)}” se eliminará con todos sus datos.`
       : admin
-        ? `<b>Eres el admin del piso.</b> Elige a otra persona como admin para poder salir. Podrás volver a entrar con el código cuando quieras.`
+        ? `<b>Eres el único admin del piso.</b> Elige a otra persona como admin para poder salir. Podrás volver a entrar con el código cuando quieras.`
         : `<b>Saldrás de “${esc(apt.name)}”.</b> Podrás volver a entrar con el código cuando quieras.`;
     if (otros.length){
       if (!known) msg += ' <b>No he podido comprobar tus cuentas:</b> puede que tengas saldos pendientes.';
@@ -1675,7 +1683,7 @@ async function renderPerfil(){
       <div class="tiles" aria-label="Código ${esc(a.invite_code.split('').join(' '))}">${tiles}</div>
       <button class="link" data-copy="${esc(a.invite_code)}">Copiar código</button>
       <ul class="list" style="margin-top:10px">
-        ${fila(`Compañeros (${mem.length})`, mem.length ? mem.map((m, i) => `<span class="mini-m"><span class="mag-dot mag sm m${(i%6)+1}">${dotInner(m)}</span>${esc(m.name)}${m.id === S.api.uid ? ' (tú)' : ''}${a.owner_id && m.id === a.owner_id ? ' · admin' : ''}</span>`).join('') : 'Sin datos')}
+        ${fila(`Compañeros (${mem.length})`, mem.length ? mem.map((m, i) => `<span class="mini-m"><span class="mag-dot mag sm m${(i%6)+1}">${dotInner(m)}</span>${esc(m.name)}${m.id === S.api.uid ? ' (tú)' : ''}${m.admin ? ' · admin' : ''}</span>`).join('') : 'Sin datos')}
         ${fila('Compra', `${pend} ${pend === 1 ? 'pendiente' : 'pendientes'}${bajos ? ` (${bajos} ${bajos === 1 ? 'se acaba' : 'se acaban'})` : ''} · ${items.length - pend} ${items.length - pend === 1 ? 'comprado' : 'comprados'}`)}
         ${fila(`Limpieza (${zones.length} ${zones.length === 1 ? 'zona' : 'zonas'})`, zones.length ? zones.map(z => esc(z.name)).join(', ') : 'Sin zonas todavía')}
         ${fila(`Facturas (${bills.length})`, bills.length
@@ -1685,9 +1693,9 @@ async function renderPerfil(){
       ${actual ? '' : `<button class="btn ghost" data-open="${esc(a.id)}" style="margin-top:12px;width:100%">Abrir este piso</button>`}
     </section>`;
   };
-  const pasan = info.filter(x => x.a.owner_id && x.a.owner_id === S.api.uid && x.mem.length > 1).map(x => esc(x.a.name));
+  const pasan = info.filter(x => x.mem.length > 1 && x.mem.some(m => m.admin && m.id === S.api.uid) && !x.mem.some(m => m.admin && m.id !== S.api.uid)).map(x => esc(x.a.name));
   const solos = info.filter(x => x.mem.length <= 1).map(x => esc(x.a.name));
-  const avisoCuenta = (pasan.length ? ` Eres admin de ${pasan.join(', ')}: el admin pasará a otra persona al azar.` : '')
+  const avisoCuenta = (pasan.length ? ` Eres el único admin de ${pasan.join(', ')}: el cargo pasará a otra persona al azar.` : '')
     + (solos.length ? ` Estás solo en ${solos.join(', ')}: ${solos.length > 1 ? 'esos pisos se eliminarán' : 'ese piso se eliminará'}.` : '');
   app.innerHTML = `${header('Mi perfil')}
     <section class="sec perfil-head">
@@ -2171,19 +2179,24 @@ async function renderPiso(){
     <section class="sec" id="comp">
       <div class="sec-head"><h2>Compañeros</h2><span class="count">${S.members.length}</span></div>
       <ul class="list">${S.members.map(m => {
-        const puedeEchar = m.id !== S.api.uid && m.id !== apt.owner_id;
-        const puedeAdmin = m.id !== apt.owner_id;   // cualquiera del piso puede dar el cargo de admin (o quedárselo)
-        const yoMismo = m.id === S.api.uid;
+        const soyAdmin = esAdmin(), otrosAdmins = S.members.filter(x => x.admin && x.id !== S.api.uid).length;
+        const puedeEchar = m.id !== S.api.uid && !m.admin;
+        const puedeAdmin = soyAdmin && !m.admin && hayAdmins();                   // solo un admin nombra a otros admins
+        const puedeBaja = m.id === S.api.uid && m.admin && otrosAdmins > 0;       // dejar de ser admin: solo uno mismo y si queda otro
         const saldo = S.echar === m.id && S.echarSaldo ? S.echarSaldo[m.id] || 0 : 0;
         return `
         <li style="flex-wrap:wrap"><span class="mag-dot mag ${mc(m.id)}">${dotInner(m)}</span>
           <span class="grow name">${esc(m.name)}</span>
-          ${apt.owner_id && m.id === apt.owner_id ? '<span class="you">Admin</span>' : ''}
+          ${m.admin ? '<span class="you">Admin</span>' : ''}
           ${m.id===S.api.uid ? '<span class="you">Tú</span>' : ''}
-          ${puedeAdmin && S.admin !== m.id ? `<button type="button" class="link" data-admin="${esc(m.id)}" aria-label="${yoMismo ? 'Hacerme admin' : 'Hacer admin a ' + esc(m.name)}">${yoMismo ? 'Hacerme admin' : 'Hacer admin'}</button>` : ''}
+          ${puedeAdmin && S.admin !== m.id ? `<button type="button" class="link" data-admin="${esc(m.id)}" aria-label="Hacer admin a ${esc(m.name)}">Hacer admin</button>` : ''}
           ${puedeAdmin && S.admin === m.id ? `<div class="confirm" role="alertdialog" aria-label="Confirmar nuevo admin" style="flex-basis:100%">
-            <span>${yoMismo ? '¿Hacerte admin del piso?' : `¿Hacer admin a <b>${esc(m.name)}</b>?`} El admin puede eliminar el piso para todos y nadie puede echarle. ${apt.owner_id ? `<b>${esc(nombreMiembro(apt.owner_id))} seguirá en el piso como un compañero más</b>, pero dejará de ser admin y cualquiera del piso podrá devolverle el cargo.` : ''}</span>
-            <span class="row"><button class="btn small" data-admin-ok="${esc(m.id)}">${yoMismo ? 'Sí, hacerme admin' : 'Sí, hacer admin'}</button><button class="btn small ghost" data-admin-no>Cancelar</button></span></div>` : ''}
+            <span>¿Hacer admin a <b>${esc(m.name)}</b>? Podrá echar a compañeros, eliminar el piso para todos y nombrar a otros admins, y nadie podrá echarle ni quitarle el cargo (solo podrá dejarlo él). <b>Tú sigues siendo admin.</b></span>
+            <span class="row"><button class="btn small" data-admin-ok="${esc(m.id)}">Sí, hacer admin</button><button class="btn small ghost" data-admin-no>Cancelar</button></span></div>` : ''}
+          ${puedeBaja && S.admin !== 'baja' ? `<button type="button" class="link" data-admin-baja aria-label="Dejar de ser admin">Dejar de ser admin</button>` : ''}
+          ${puedeBaja && S.admin === 'baja' ? `<div class="confirm" role="alertdialog" aria-label="Confirmar dejar de ser admin" style="flex-basis:100%">
+            <span>¿Dejar de ser admin? Seguirás en el piso como compañero. Para volver a ser admin tendrá que nombrarte otro admin.</span>
+            <span class="row"><button class="btn small" data-admin-baja-ok>Sí, dejar de ser admin</button><button class="btn small ghost" data-admin-no>Cancelar</button></span></div>` : ''}
           ${puedeEchar && S.echar !== m.id ? `<button type="button" class="link" data-echar="${esc(m.id)}" aria-label="Echar a ${esc(m.name)} del piso">Echar</button>` : ''}
           ${puedeEchar && S.echar === m.id ? `<div class="confirm" role="alertdialog" aria-label="Confirmar" style="flex-basis:100%">
             <span>¿Echar a <b>${esc(m.name)}</b> del piso? Dejará de verlo y sus turnos de limpieza pendientes pasarán a otros.${
@@ -2191,18 +2204,24 @@ async function renderPiso(){
               Si conserva el código del piso, podría volver a unirse.</span>
             <span class="row"><button class="btn small danger" data-echar-ok="${esc(m.id)}">Sí, echar</button><button class="btn small ghost" data-echar-no>Cancelar</button></span></div>` : ''}
         </li>`; }).join('')}</ul>
-      ${S.members.length > 1 ? `<p class="small dim" style="margin:8px 2px 0">Cualquiera del piso puede echar a otro compañero${apt.owner_id ? ', menos al admin' : ''}.${apt.owner_id ? ' Cualquiera puede cambiar quién es admin con «Hacer admin».' : ''}</p>` : ''}
+      ${S.members.length > 1 ? `<p class="small dim" style="margin:8px 2px 0">Cualquiera del piso puede echar a otro compañero, menos a un admin. ${hayAdmins() ? (esAdmin() ? 'Tú, que eres admin, puedes nombrar a otros admins con «Hacer admin».' : 'Solo un admin puede nombrar a otros admins.') : ''}</p>` : ''}
     </section>
     ${ajustesPisoHtml(apt)}`;
   bindAjustesPiso(apt);
   aplicarSub('piso');
   app.querySelectorAll('[data-admin]').forEach(b => b.onclick = async () => { S.admin = b.dataset.admin; S.echar = null; await renderPiso(); });
+  app.querySelectorAll('[data-admin-baja]').forEach(b => b.onclick = async () => { S.admin = 'baja'; S.echar = null; await renderPiso(); });
   app.querySelectorAll('[data-admin-no]').forEach(b => b.onclick = async () => { S.admin = null; await renderPiso(); });
   app.querySelectorAll('[data-admin-ok]').forEach(b => b.onclick = async () => {
     b.disabled = true;
     const quien = S.members.find(m => m.id === b.dataset.adminOk)?.name || 'Esa persona';
-    const yo = b.dataset.adminOk === S.api.uid;
-    try{ await S.api.transferOwner(apt.id, b.dataset.adminOk); S.admin = null; await refreshApt(); toast(yo ? 'Ahora eres el admin del piso.' : `${quien} es ahora el admin del piso.`); }
+    try{ await S.api.setAdmin(apt.id, b.dataset.adminOk, true); S.admin = null; await refreshApt(); toast(`${quien} es ahora admin del piso.`); }
+    catch(err){ S.admin = null; toast(friendly(err)); }
+    await renderPiso();
+  });
+  app.querySelectorAll('[data-admin-baja-ok]').forEach(b => b.onclick = async () => {
+    b.disabled = true;
+    try{ await S.api.setAdmin(apt.id, S.api.uid, false); S.admin = null; await refreshApt(); toast('Ya no eres admin del piso. Sigues en él como compañero.'); }
     catch(err){ S.admin = null; toast(friendly(err)); }
     await renderPiso();
   });
@@ -2353,6 +2372,10 @@ async function renderCompra(){
   const bloqueHecho = (et, lista) => `<div class="day">${esc(et)} <span class="n">${lista.length}</span><span class="tot">${eur(suma(lista))}</span></div>
     <ul class="list">${lista.map(filaCompra).join('')}</ul>`;
   const seccionHecha = (titulo, lista) => lista.length ? `<h3 class="wk">${titulo} <span class="n small dim">${lista.length} · ${eur(suma(lista))}</span></h3>${porDias(lista).map(d => bloqueHecho(d.et, d.items)).join('')}` : '';
+  const cf = ['mios','otros'].includes(S.compraFiltro) ? S.compraFiltro : 'todos';
+  const filtrosHechos = comprados.length ? `<div class="filtros" role="group" aria-label="Filtrar lo comprado">${[['todos','Todos',comprados.length],['mios','Comprado por mí',mios.length],['otros','Por compañeros',otros.length]].map(([k,v,n]) =>
+    `<button type="button" class="filtro" data-cfiltro="${k}" aria-pressed="${cf === k}">${v} <span>${n}</span></button>`).join('')}</div>` : '';
+  const vacioHecho = txt => `<p class="empty">${txt}</p>`;
   const resumenHechos = comprados.length ? `<div class="resumen" aria-label="Lo gastado en compra">
       <div class="mio"><b>Tú</b><span class="v">${eur(suma(mios))}</span><small>${mios.length} ${mios.length === 1 ? 'producto' : 'productos'}</small></div>
       <div><b>Compañeros</b><span class="v">${eur(suma(otros))}</span><small>${otros.length} ${otros.length === 1 ? 'producto' : 'productos'}</small></div>
@@ -2377,7 +2400,9 @@ async function renderCompra(){
       </div>
       <div data-g="hechos">
       <div class="sec-head"><h2>Ya comprado</h2><span class="count">${comprados.length}</span></div>
-      ${comprados.length ? resumenHechos + seccionHecha('Comprado por mí', mios) + seccionHecha('Comprado por los compañeros', otros) + '<p class="small dim" style="margin:6px 2px 0">Si tachaste algo por error, vuelve a pulsarlo y regresa a «Por comprar». Si lo compraste tú, puedes anotar lo que costó; si lo destachas o lo quitas, ese gasto se elimina.</p>'
+      ${comprados.length ? resumenHechos + filtrosHechos
+        + (cf !== 'otros' ? (mios.length ? seccionHecha('Comprado por mí', mios) : (cf === 'mios' ? vacioHecho('Todavía no has comprado nada.') : '')) : '')
+        + (cf !== 'mios' ? (otros.length ? seccionHecha('Comprado por los compañeros', otros) : (cf === 'otros' ? vacioHecho('Tus compañeros todavía no han comprado nada.') : '')) : '') + '<p class="small dim" style="margin:6px 2px 0">Si tachaste algo por error, vuelve a pulsarlo y regresa a «Por comprar». Si lo compraste tú, puedes anotar lo que costó; si lo destachas o lo quitas, ese gasto se elimina.</p>'
         : '<p class="empty">Todavía no se ha tachado nada.</p>'}
       </div>
     </section>`;
@@ -2417,6 +2442,7 @@ async function renderCompra(){
     const it = conGasto(b.dataset.d);
     try{ await S.api.delItem(b.dataset.d); if (it) toast(`Quitado. También se ha eliminado su gasto de ${eur(it.expense.amount)}.`); await renderCompra(); }catch(err){ toast(friendly(err)); }
   });
+  app.querySelectorAll('[data-cfiltro]').forEach(b => b.onclick = async () => { S.compraFiltro = b.dataset.cfiltro; await renderCompra(); });
   app.querySelectorAll('[data-compra-no]').forEach(b => b.onclick = async () => { S.compraPrecio = null; await renderCompra(); });
   const fc = app.querySelector('form[data-compra]');
   if (fc){
@@ -2817,24 +2843,26 @@ function resumenMes(bills, pagos, gastos){
   const occ = [];
   for (const g of gastos) if (String(g.date).slice(0, 7) === ym){
     const mia = (g.shares || []).find(x => x.user_id === yo);
-    occ.push({bill:g.bill_id, due:g.date, total:Number(g.amount), parte: mia ? mia.amount : Math.round(Number(g.amount) / n * 100) / 100, adelanta:g.paid_by === yo});
+    occ.push({bill:g.bill_id, name:g.name, due:g.date, total:Number(g.amount), parte: mia ? mia.amount : Math.round(Number(g.amount) / n * 100) / 100, adelanta:g.paid_by === yo});
   }
   for (const b of bills){
     if (b.is_paused) continue;
     let d = b.next_due_date, k = 0;
     while (d.slice(0, 7) <= ym && k++ < 40){
       if (d.slice(0, 7) === ym && !occ.some(o => o.bill === b.id && o.due === d))
-        occ.push({bill:b.id, due:d, total:Number(b.amount), parte:Math.round(Number(b.amount) / n * 100) / 100, adelanta:b.paid_by === yo});
+        occ.push({bill:b.id, name:b.name, due:d, total:Number(b.amount), parte:Math.round(Number(b.amount) / n * 100) / 100, adelanta:b.paid_by === yo});
       d = sumaFrecuencia(d, b.frequency);
     }
   }
-  let total = 0, mio = 0, pagado = 0;
+  let total = 0, mio = 0, pagado = 0; const faltan = [];
   for (const o of occ){
     total += o.total; mio += o.parte;
     if (o.adelanta || pagos.some(p => p.bill_id === o.bill && p.due_date === o.due && p.user_id === yo)) pagado += o.parte;
+    else if (o.parte > 0) faltan.push(o);
   }
+  faltan.sort((a, b) => a.due.localeCompare(b.due) || a.name.localeCompare(b.name, 'es'));
   const r = x => Math.round(x * 100) / 100;
-  return {n:occ.length, total:r(total), mio:r(mio), pagado:r(pagado), queda:r(Math.max(mio - pagado, 0)), mes:h.toLocaleDateString('es-ES', {month:'long'})};
+  return {n:occ.length, total:r(total), mio:r(mio), pagado:r(pagado), queda:r(Math.max(mio - pagado, 0)), faltan, mes:h.toLocaleDateString('es-ES', {month:'long'})};
 }
 function resumenMesHtml(bills, pagos, gastos){
   const r = resumenMes(bills, pagos, gastos);
@@ -2842,7 +2870,10 @@ function resumenMesHtml(bills, pagos, gastos){
   return `<div class="resumen mes" aria-label="Facturas de ${esc(r.mes)}">
     <div class="queda ${r.queda < 0.005 ? 'cero' : ''}"><b>Te queda por pagar</b><span class="v">${eur(r.queda)}</span><small>de tu parte de ${esc(r.mes)}</small></div>
     <div><b>Ya pagado</b><span class="v">${eur(r.pagado)}</span><small>tu parte</small></div>
-    <div class="full"><b>A pagar en ${esc(r.mes)}, en total</b><span class="v">${eur(r.total)}</span><small>${r.n} ${r.n === 1 ? 'factura' : 'facturas'} entre todos · tu parte ${eur(r.mio)}. Si adelantas tú una factura, tu parte cuenta como pagada.</small></div></div>`;
+    <div class="full"><b>A pagar en ${esc(r.mes)}, en total</b><span class="v">${eur(r.total)}</span><small>${r.n} ${r.n === 1 ? 'factura' : 'facturas'} entre todos · tu parte ${eur(r.mio)}. Si adelantas tú una factura, tu parte cuenta como pagada.</small></div></div>
+    ${r.faltan.length ? `<div class="faltan"><p class="small" style="margin:6px 2px 4px;font-weight:900">Te falta por pagar en ${esc(r.mes)}:</p>
+      <ul class="list">${r.faltan.map(o => `<li><span class="grow"><span class="name">${esc(o.name)}</span><br><span class="small dim">${esc(fmtDate(o.due))}${daysUntil(o.due) > 0 ? ' · todavía no ha vencido' : ''}</span></span>
+        <button class="btn small" data-pay="${esc(o.bill)}" data-due="${esc(o.due)}" data-on="false" aria-label="Pagar mi parte de ${esc(o.name)} del ${esc(fmtDate(o.due))}">Pagar ${eur(o.parte)}</button></li>`).join('')}</ul></div>` : ''}`;
 }
 function facturasHtml(bills, pagos, gastos = []){
   const n = Math.max(S.members.length, 1), yo = S.api.uid;
