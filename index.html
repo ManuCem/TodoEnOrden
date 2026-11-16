@@ -326,6 +326,12 @@ input.invalid,select.invalid{border-color:var(--bad)}
 .paleta{display:flex;flex-direction:column;align-items:center;gap:4px;background:none;border:2px solid transparent;border-radius:14px;padding:6px 2px;color:var(--ink);font:inherit;font-size:13px;font-weight:800;cursor:pointer;min-height:64px}
 .paleta .muestra{width:34px;height:34px;border-radius:50%;box-shadow:inset 0 0 0 2px rgba(255,255,255,.6),0 1px 3px rgba(0,0,0,.25)}
 .paleta[aria-pressed="true"]{border-color:var(--accent);background:var(--accent-soft)}
+.propuesta{border:2px solid var(--accent);background:var(--accent-soft);border-radius:14px;padding:12px;margin:0 0 10px}
+.cambio{display:grid;gap:8px;flex-basis:100%;margin-top:6px}
+.cambio select{min-height:44px}
+.state.tarde{background:var(--alert-bg);color:var(--alert-ink);font-weight:800}
+.ausencias{margin-top:14px}
+.ausencias .list li{gap:10px}
 .tema-sel{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;overflow:visible}
 .tema-sel .filtro{justify-content:center;padding-left:6px;padding-right:6px;white-space:nowrap}
 .tk-lineas{list-style:none;margin:6px 0 0;padding:6px 0 0 10px;border-left:2px solid var(--line);display:grid;gap:2px}
@@ -771,6 +777,14 @@ function remoteApi(sb, uid){
         .sort((a,b)=> b.week.localeCompare(a.week) || a.zone.localeCompare(b.zone,'es'));
     },
     async weekStart(){ return ok(await sb.rpc('current_week_start')); },
+    // Cambio de turno: uno propone y el otro acepta o rechaza (lo comprueba Supabase)
+    async swaps(aptId, week){ return ok(await sb.from('cleaning_swaps').select('id,from_assignment,to_assignment,from_user,to_user,status,created_at').eq('apartment_id', aptId).eq('week_start', week).eq('status', 'pending')) || []; },
+    async requestSwap(asgId, toUser){ return ok(await sb.rpc('request_cleaning_swap', {p_assignment:asgId, p_to_user:toUser})); },
+    async answerSwap(swapId, accept){ ok(await sb.rpc('answer_cleaning_swap', {p_swap:swapId, p_accept:accept})); },
+    // Ausencias: mientras estás fuera no te tocan turnos ni entras en el reparto de la compra
+    async absences(aptId){ return ok(await sb.from('absences').select('id,user_id,start_date,end_date,note').eq('apartment_id', aptId).gte('end_date', iso(new Date())).order('start_date')) || []; },
+    async addAbsence(aptId, a){ return ok(await sb.rpc('add_absence', {p_apartment_id:aptId, p_start:a.start, p_end:a.end, p_note:a.note || null})); },
+    async delAbsence(idA){ ok(await sb.rpc('delete_absence', {p_id:idA})); },
     async setDone(id,v){
       const rows = ok(await sb.from('cleaning_assignments').update({is_done:v}).eq('id', id).select('id'));
       if (!rows.length) throw new Error('Solo puedes marcar tus propias tareas.');
@@ -938,14 +952,28 @@ function demoApi(clave){
     bills: P.facturas.map(([name,amount,frequency,dias,quien,pausada],i) => ({
       id:'b'+i, name, amount, frequency, next_due_date: iso(new Date(Date.now()+dias*864e5)),
       paid_by: uid(quien), created_by: uid(quien), is_paused: !!pausada })),
-    pagos: [], gastos: [], borrados: [], rules: [], rulesLog: [], notices: [], manual: [], payments: [], n: 100
+    pagos: [], gastos: [], borrados: [], rules: [], rulesLog: [], notices: [], manual: [], payments: [], n: 100,
+    swaps: [], cambios: {}, ausencias: []
   };
+  // para enseñarlo: alguien del piso se va unos días
+  if (P.miembros.length > 3) db.ausencias.push({id:'au0', user_id:uid(3), start_date:iso(new Date(Date.now()+3*864e5)), end_date:iso(new Date(Date.now()+16*864e5)), note:'Erasmus'});
   // una tarea de la semana ya hecha, para que la demo no salga vacía
   const w = iso(mondayOf());
   if (db.zones.length > 1) db.done['z1'+w] = new Date(Date.now()-864e5).toISOString();
   if (db.bills.length && db.members.length > 1)
     db.pagos.push({ bill_id: db.bills[0].id, user_id: uid(1), due_date: db.bills[0].next_due_date });
   const id = p => p + (db.n++);
+  // días de [desde, hasta] que alguien está fuera, y reparto de una semana con cambios de turno y ausencias (como la base de datos)
+  const diasFuera = (u, desde, hasta) => { let n = 0; for (const x of db.ausencias.filter(y => y.user_id === u)){ const a = x.start_date > desde ? x.start_date : desde, b = x.end_date < hasta ? x.end_date : hasta;
+    if (a <= b) n += Math.round((new Date(b + 'T00:00:00') - new Date(a + 'T00:00:00')) / 864e5) + 1; } return n; };
+  const asgDemo = week => {
+    const wk = Math.floor((new Date(week+'T00:00:00') - new Date('2000-01-03T00:00:00'))/(7*864e5));
+    const fin = iso(new Date(new Date(week + 'T00:00:00').getTime() + 6*864e5));
+    const pres = db.members.filter(m => diasFuera(m.id, week, fin) < 4), lista = pres.length >= 2 ? pres : db.members;
+    return db.zones.map((z,i) => { const k = z.id + week; let m = lista[(i+wk) % lista.length];
+      if (db.cambios[k] && diasFuera(db.cambios[k], week, fin) < 4) m = db.members.find(x => x.id === db.cambios[k]) || m;   // si se va, su turno pasa a otro
+      return {id:k, user_id:m.id, is_done:!!db.done[k], done_at:db.done[k] || null, zone:z.name, name:m.name}; });
+  };
   // reparto de un gasto (igual que la base de datos); devuelve las partes o un texto de error
   const calcularGasto = g => {
     if (!(g.amount > 0)) return 'El importe debe ser mayor que 0';
@@ -1121,17 +1149,42 @@ function demoApi(clave){
     delZone:i=>{ db.zones=db.zones.filter(x=>x.id!==i); return wait(); },
     assignments:(a,week)=>{
       if (db.members.length < 2) return wait([]);
-      const wk = Math.floor((new Date(week+'T00:00:00') - new Date('2000-01-03T00:00:00'))/(7*864e5));
-      return wait(db.zones.map((z,i)=>{ const m = db.members[(i+wk)%db.members.length]; const k = z.id+week;
-        return {id:k,user_id:m.id,is_done:!!db.done[k],done_at:db.done[k]||null,zone:z.name,name:m.name}; }));
+      return wait(asgDemo(week));
     },
+    swaps:(a, week)=>{
+      if (!db.swapSemilla){   // para enseñarlo: Manu te propone cambiar el turno de esta semana
+        db.swapSemilla = true; const as = asgDemo(week), suya = as.find(x => x.user_id === uid(1) && !x.is_done), mia = as.find(x => x.user_id === me && !x.is_done);
+        if (suya) db.swaps.push({id:id('s'), from_assignment:suya.id, to_assignment:mia ? mia.id : null, from_user:uid(1), to_user:me, status:'pending', week});
+      }
+      return wait(db.swaps.filter(x => x.status === 'pending' && x.week === week));
+    },
+    requestSwap:(asgId, to)=>{ const week = iso(mondayOf()), as = asgDemo(week), a = as.find(x => x.id === asgId);
+      if (!a || a.user_id !== me) return Promise.reject(new Error('Solo puedes proponer cambiar tu propio turno'));
+      if (a.is_done) return Promise.reject(new Error('Ese turno ya está hecho'));
+      if (!to || to === me || !db.members.some(m => m.id === to)) return Promise.reject(new Error('Elige a otra persona del piso'));
+      db.swaps.forEach(x => { if (x.from_assignment === asgId && x.status === 'pending') x.status = 'cancelled'; });
+      const t = as.find(x => x.user_id === to && !x.is_done);
+      db.swaps.push({id:id('s'), from_assignment:asgId, to_assignment:t ? t.id : null, from_user:me, to_user:to, status:'pending', week}); return wait(); },
+    answerSwap:(sid, ok_)=>{ const x = db.swaps.find(y => y.id === sid && y.status === 'pending'); if (!x) return Promise.reject(new Error('Esa propuesta ya está respondida'));
+      if (x.from_user === me && !ok_){ x.status = 'cancelled'; return wait(); }
+      if (x.to_user !== me) return Promise.reject(new Error('Solo la persona a la que se lo proponen puede responder'));
+      if (!ok_){ x.status = 'rejected'; return wait(); }
+      db.cambios[x.from_assignment] = x.to_user; if (x.to_assignment) db.cambios[x.to_assignment] = x.from_user; x.status = 'accepted'; return wait(); },
+    absences:()=>wait(db.ausencias.filter(x => x.end_date >= iso(new Date())).sort((x,y) => x.start_date.localeCompare(y.start_date))),
+    addAbsence:(a, x)=>{ if (!x.start || !x.end) return Promise.reject(new Error('Indica desde y hasta cuándo'));
+      if (x.end < x.start) return Promise.reject(new Error('La vuelta no puede ser antes de la salida'));
+      if (x.end < iso(new Date())) return Promise.reject(new Error('Esa ausencia ya ha pasado'));
+      db.ausencias.push({id:id('au'), user_id:me, start_date:x.start, end_date:x.end, note:x.note || null}); return wait(); },
+    delAbsence:i=>{ const k = db.ausencias.findIndex(x => x.id === i && x.user_id === me); if (k < 0) return Promise.reject(new Error('Solo puedes quitar tus propias ausencias')); db.ausencias.splice(k,1); return wait(); },
     weekStart:()=>wait(iso(mondayOf())),
     history:(a,fromWeek)=>{
+      // (la semana actual sale de asgDemo, con cambios de turno y ausencias)
       const out = []; const base = mondayOf();
       for (let k=0;k<6;k++){
         const ws = new Date(base); ws.setDate(ws.getDate()-7*k); const week = iso(ws);
         if (week < fromWeek) break;
         const wk = Math.floor((new Date(week+'T00:00:00') - new Date('2000-01-03T00:00:00'))/(7*864e5));
+        if (k === 0){ asgDemo(week).forEach(x => out.push({...x, week})); continue; }
         db.zones.forEach((z,i)=>{ const m = db.members[(i+wk)%db.members.length]; const key = z.id+week;
           let done_at = db.done[key] || null;
           if (k>0 && !(key in db.done) && (i*7+k*3)%5!==0){ const d = new Date(ws); d.setDate(d.getDate()+((i+k)%5)+1); d.setHours(9+((i*3+k)%11),(i*17)%60,0,0); done_at = d.toISOString(); }
@@ -1180,7 +1233,7 @@ function demoApi(clave){
       if (it.expense_id && db.manual.some(g => g.id === it.expense_id)) return Promise.reject(new Error('Ese producto ya tiene su gasto anotado'));
       if (it.is_bought && it.bought_by && it.bought_by !== me) return Promise.reject(new Error('Solo quien lo compró puede anotar lo que costó'));
       if (!(amount > 0)) return Promise.reject(new Error('El importe debe ser mayor que 0'));
-      const parts = [me, ...db.members.map(m => m.id).filter(u => u !== me)];
+      const hoyD = iso(new Date()), parts = [me, ...db.members.map(m => m.id).filter(u => u !== me && !diasFuera(u, hoyD, hoyD))];   // quien está fuera no entra
       const g = {id:id('g'), name:'Compra: ' + it.name, amount:Math.round(amount*100)/100, date:iso(new Date()), paid_by:me, created_by:me, created_at:new Date().toISOString(), shares:repartir(amount, parts)};
       db.manual.push(g);
       if (!it.is_bought){ it.is_bought = true; it.running_low = false; it.low_by = null; it.low_at = null; it.bought_by = me; it.bought_at = new Date().toISOString(); }
@@ -1565,14 +1618,14 @@ let ultimaCarga = Date.now();
 // No se recarga la pantalla si estás escribiendo, con un formulario abierto o confirmando algo
 function estaOcupado(){
   return !!(S.gastoForm || S.billForm || S.editBill || S.editItem || S.normaForm || S.avisoForm || S.echar || S.saldar ||
-    S.movDel || S.gastoEdit || S.billDel || S.normaDel || S.avisoDel || S.precioItem || S.compraPrecio || S.ticket ||
+    S.movDel || S.gastoEdit || S.billDel || S.normaDel || S.avisoDel || S.precioItem || S.compraPrecio || S.ticket || S.cambio || S.ausForm ||
     (document.activeElement && document.activeElement.matches && document.activeElement.matches('input,textarea,select')));
 }
 /* ---------- Cambios en directo (Supabase Realtime) ----------
    La app escucha los cambios de tu piso. Si alguien anota un gasto o tacha algo, tu pantalla se actualiza sola
    (medio segundo después, y nunca mientras estás escribiendo: entonces espera a que termines). */
 let canal = null, rtT = null, rtMiembros = false;
-const TABLAS_DIRECTO = ['shopping_items','expenses','payments','bill_payments','recurring_bills','cleaning_assignments','cleaning_zones','bulletin_notices','house_rules','apartment_members'];
+const TABLAS_DIRECTO = ['shopping_items','expenses','payments','bill_payments','recurring_bills','cleaning_assignments','cleaning_zones','bulletin_notices','house_rules','apartment_members','cleaning_swaps','absences'];
 function conectarDirecto(){
   if (!S.sb || !S.api || S.api.kind !== 'supabase') return;
   const apt = S.apt ? S.apt.id : null;
@@ -2293,14 +2346,52 @@ ${esc(d.description || '')}</dd>` : '';
   };
 }
 
+// Ausencias: «me voy unos días». Mientras estás fuera no te tocan turnos (si faltas 4 días o más de la semana) ni entras en el reparto de la compra
+function ausenciasHtml(){
+  const hoy = iso(new Date()), lista = (S.ausencias || []).slice().sort((a,b) => a.start_date.localeCompare(b.start_date));
+  const nom = u => u === S.api.uid ? 'Tú' : nombreMiembro(u);
+  return `<div class="ausencias" id="ausencias"><h3 class="wk">Ausencias</h3>
+    ${lista.length ? `<ul class="list">${lista.map(a => `<li><span aria-hidden="true">✈</span><span class="grow"><b>${esc(nom(a.user_id))}</b> ${a.start_date <= hoy ? 'fuera hasta el' : `fuera del ${esc(fechaCorta(a.start_date))} al`} ${esc(fechaCorta(a.end_date))}${a.note ? `<br><span class="small dim">${esc(a.note)}</span>` : ''}</span>
+      ${a.user_id === S.api.uid ? `<button type="button" class="link" data-aus-del="${esc(a.id)}">Quitar</button>` : ''}</li>`).join('')}</ul>` : '<p class="small dim" style="margin:0 2px 6px">Nadie está fuera ahora mismo.</p>'}
+    ${S.ausForm ? `<form id="fAus" class="ticket-form" novalidate>
+      <div class="row" style="gap:10px;flex-wrap:wrap"><label style="flex:1 1 130px">Me voy el<input id="ausDesde" type="date" min="${hoy}" value="${hoy}"></label>
+        <label style="flex:1 1 130px">Vuelvo el<input id="ausHasta" type="date" min="${hoy}"></label></div>
+      <label>Motivo (opcional)<input id="ausNota" maxlength="60" placeholder="Vacaciones, Erasmus, casa de mis padres…"></label>
+      <small class="err" id="eAus" role="alert" hidden></small>
+      <p class="small dim" style="margin:0">Mientras estés fuera no te tocarán turnos de limpieza (las semanas en las que faltes 4 días o más; si ya tenías uno esta semana, pasa a otro compañero) y no entrarás en el reparto de lo que se compre. Las facturas se siguen repartiendo igual.</p>
+      <div class="row"><button class="btn" type="submit">Guardar</button><button class="btn ghost" type="button" id="ausNo">Cancelar</button></div></form>`
+      : `<button type="button" class="btn ghost" id="ausAbrir" style="width:100%">✈ Me voy unos días</button>`}</div>`;
+}
+function bindAusencias(rehacer){
+  const ab = $('#ausAbrir'); if (ab) ab.onclick = async () => { S.ausForm = true; await rehacer(); $('#ausHasta')?.focus(); };
+  const no = $('#ausNo'); if (no) no.onclick = async () => { S.ausForm = null; await rehacer(); };
+  app.querySelectorAll('[data-aus-del]').forEach(b => b.onclick = async () => {
+    b.disabled = true;
+    try{ await S.api.delAbsence(b.dataset.ausDel); await cargarAusencias(); toast('Ausencia quitada.'); await rehacer(); }catch(err){ b.disabled = false; toast(friendly(err)); }
+  });
+  const f = $('#fAus');
+  if (f) f.onsubmit = async e => {
+    e.preventDefault();
+    const a = {start:$('#ausDesde').value, end:$('#ausHasta').value, note:$('#ausNota').value.trim()}, er = $('#eAus');
+    const mal = !a.start || !a.end ? 'Indica cuándo te vas y cuándo vuelves.' : a.end < a.start ? 'La vuelta no puede ser antes de la salida.' : '';
+    if (mal){ er.textContent = mal; er.hidden = false; return; }
+    const btn = f.querySelector('button[type=submit]'); btn.disabled = true;
+    try{ await S.api.addAbsence(S.apt.id, a); S.ausForm = null; await cargarAusencias();
+      toast(`Apuntado: fuera del ${fechaCorta(a.start)} al ${fechaCorta(a.end)}. No te tocarán turnos ni entrarás en la compra.`); await rehacer(); }
+    catch(err){ btn.disabled = false; er.textContent = friendly(err); er.hidden = false; }
+  };
+}
 // 5) Avisos para ti: lo que te toca hacer o pagar y lo que ha pasado desde tu última visita
 async function paraTiHtml(apt){
   const nada = () => [];
-  const [bal, bills, pagos, gastos, items, manuales] = await Promise.all([
+  const [bal, bills, pagos, gastos, items, manuales, props] = await Promise.all([
     S.api.balances(apt.id).catch(() => null), S.api.bills(apt.id).catch(nada), S.api.billPayments(apt.id).catch(nada),
-    S.api.billExpenses(apt.id).catch(nada), S.api.items(apt.id).catch(nada), S.api.expenses(apt.id).catch(nada)]);
+    S.api.billExpenses(apt.id).catch(nada), S.api.items(apt.id).catch(nada), S.api.expenses(apt.id).catch(nada),
+    S.api.swaps(apt.id, iso(curMonday())).catch(nada)]);
   const yo = S.api.uid, filas = [];
   const fila = (ico, txt, go, sub, cls = '') => filas.push(`<li class="${cls}"><button type="button" class="parati-btn" data-go="${go}"${sub ? ` data-subgo="${sub}"` : ''}><span class="ico" aria-hidden="true">${ico}</span><span class="grow">${txt}</span><span aria-hidden="true">›</span></button></li>`);
+  const paraMi = props.filter(x => x.to_user === yo);
+  if (paraMi.length) fila('🔁', `<b>${paraMi.length === 1 ? esc(nombreMiembro(paraMi[0].from_user)) + ' te propone cambiar el turno de limpieza' : paraMi.length + ' propuestas de cambio de turno'}</b><br><span class="small dim">Acéptalo o recházalo en Limpieza</span>`, 'limpieza', 'semana', 'mal');
   const r = resumenMes(bills, pagos, gastos);
   const urg = r.faltan.filter(o => daysUntil(o.due) <= 3), deuda = r.antes.length + urg.length;
   if (deuda){ const tot = Math.round((r.deAntes + urg.reduce((x, o) => x + o.parte, 0)) * 100) / 100;
@@ -2322,7 +2413,7 @@ async function paraTiHtml(apt){
 async function renderPiso(){
   const apt = S.apt;
   let asg = null;
-  const [, mem, paraTi] = await Promise.all([loadWeek(), S.api.members(apt.id).catch(() => null), paraTiHtml(apt).catch(() => '')]);
+  const [, mem, paraTi] = await Promise.all([loadWeek(), S.api.members(apt.id).catch(() => null), paraTiHtml(apt).catch(() => ''), cargarAusencias()]);
   if (mem) S.members = mem;
   try{ asg = await S.api.assignments(apt.id, iso(curMonday())); }catch{ asg = null; }
   if (S.tab !== 'piso' || S.apt !== apt) return;
@@ -2356,7 +2447,7 @@ async function renderPiso(){
         const saldo = S.echar === m.id && S.echarSaldo ? S.echarSaldo[m.id] || 0 : 0;
         return `
         <li style="flex-wrap:wrap"><span class="mag-dot mag ${mc(m.id)}">${dotInner(m)}</span>
-          <span class="grow name">${esc(m.name)}</span>
+          <span class="grow name">${esc(m.name)}${ausenciaDe(m.id) ? `<br><span class="small dim" style="font-weight:600">✈ fuera hasta el ${esc(fechaCorta(ausenciaDe(m.id).end_date))}</span>` : ''}</span>
           ${m.admin ? '<span class="you">Admin</span>' : ''}
           ${m.id===S.api.uid ? '<span class="you">Tú</span>' : ''}
           ${puedeAdmin && S.admin !== m.id ? `<button type="button" class="link" data-admin="${esc(m.id)}" aria-label="Hacer admin a ${esc(m.name)}">Hacer admin</button>` : ''}
@@ -2375,9 +2466,11 @@ async function renderPiso(){
             <span class="row"><button class="btn small danger" data-echar-ok="${esc(m.id)}">Sí, echar</button><button class="btn small ghost" data-echar-no>Cancelar</button></span></div>` : ''}
         </li>`; }).join('')}</ul>
       ${S.members.length > 1 ? `<p class="small dim" style="margin:8px 2px 0">${esAdmin() ? 'Eres admin: puedes echar a un compañero (nunca a otro admin) y nombrar a otros admins con «Hacer admin».' : 'Solo un admin puede echar a alguien del piso o nombrar a otros admins.'}</p>` : ''}
+      ${ausenciasHtml()}
     </section>
     ${ajustesPisoHtml(apt)}`;
   bindAjustesPiso(apt);
+  bindAusencias(renderPiso);
   aplicarSub('piso');
   app.querySelectorAll('[data-admin]').forEach(b => b.onclick = async () => { S.admin = b.dataset.admin; S.echar = null; await renderPiso(); });
   app.querySelectorAll('[data-admin-baja]').forEach(b => b.onclick = async () => { S.admin = 'baja'; S.echar = null; await renderPiso(); });
@@ -2513,7 +2606,8 @@ function ticketFormHtml(pend){
     <small class="err" id="eTkImp" role="alert" hidden></small>
     <label>Concepto<input id="tkDesc" maxlength="80" value="Compra del súper"></label>
     <fieldset class="tk-quien"><legend>Se reparte a partes iguales entre</legend>
-      ${S.members.map(m => `<label class="chk"><input type="checkbox" name="tkP" value="${esc(m.id)}" checked> ${esc(m.id === S.api.uid ? 'Tú' : m.name)}</label>`).join('')}</fieldset>
+      ${S.members.map(m => { const fuera = m.id !== S.api.uid && fueraHoy(m.id);
+        return `<label class="chk"><input type="checkbox" name="tkP" value="${esc(m.id)}" ${fuera ? '' : 'checked'}> ${esc(m.id === S.api.uid ? 'Tú' : m.name)}${fuera ? ' <span class="small dim">(fuera)</span>' : ''}</label>`; }).join('')}</fieldset>
     <small class="err" id="eTkP" role="alert" hidden></small>
     ${pend.length ? `<fieldset class="tk-quien tk-items"><legend>¿Qué has comprado con este ticket? (opcional, se tacha)</legend>
       ${pend.map(i => `<label class="chk"><input type="checkbox" name="tkI" value="${esc(i.id)}"> ${esc(i.name)}</label>`).join('')}</fieldset>` : ''}
@@ -2561,6 +2655,7 @@ function filtrarCompra(){
   res.textContent = q ? (total ? `${total} ${total === 1 ? 'producto' : 'productos'} con «${(S.qCompra || '').trim()}»` : '') : '';
 }
 async function renderCompra(){
+  await cargarAusencias();
   const items = (await S.api.items(S.apt.id)).filter(i => !ocultos.has('i:' + i.id))
     .map(i => ocultos.has('u:' + i.id) ? {...i, is_bought:false, bought_by:null, bought_at:null, expense:null} : i);
   const pend = items.filter(i => !i.is_bought);
@@ -2740,7 +2835,7 @@ async function renderCompra(){
       const amount = Math.round(parseFloat(txt) * 100) / 100;
       if (!(amount > 0)){ const er = $('#eCompra'); er.textContent = 'Indica lo que costó (más de 0 €) o déjalo vacío.'; er.hidden = false; entrada.focus(); return; }
       btn.disabled = true;
-      try{ await S.api.buyItemWithExpense(idc, amount); S.compraPrecio = null; toast(`Comprado y gasto anotado: ${eur(amount)} entre ${S.members.length}. Lo verás en Gastos.`); await renderCompra(); }
+      try{ await S.api.buyItemWithExpense(idc, amount); S.compraPrecio = null; toast(`Comprado y gasto anotado: ${eur(amount)} entre ${S.members.filter(m => m.id === S.api.uid || !fueraHoy(m.id)).length}. Lo verás en Gastos.`); await renderCompra(); }
       catch(err){ btn.disabled = false; toast(friendly(err)); }
     };
   }
@@ -2842,7 +2937,33 @@ async function renderLimpieza(){
   if (mem) S.members = mem;
   const week = iso(curMonday());
   const [zones, asg] = await Promise.all([S.api.zones(S.apt.id), S.api.assignments(S.apt.id, week)]);
-  const descansan = asg.length ? S.members.filter(m => !asg.some(a => a.user_id === m.id)).map(m => m.id === S.api.uid ? 'tú' : m.name) : [];
+  const [swaps] = await Promise.all([S.api.swaps(S.apt.id, week).catch(() => []), cargarAusencias()]);
+  const finSemana = iso(new Date(curMonday().getTime() + 6*864e5));
+  const fueraSemana = u => (S.ausencias || []).some(x => x.user_id === u && x.start_date <= finSemana && x.end_date >= week);
+  const descansan = asg.length ? S.members.filter(m => !asg.some(a => a.user_id === m.id)).map(m => (m.id === S.api.uid ? 'tú' : m.name) + (fueraSemana(m.id) ? ' (fuera)' : '')) : [];
+  const quedan = daysUntil(finSemana), apurado = quedan <= 2;   // a partir del viernes se avisa de lo que falta
+  const yoU = S.api.uid, mias = swaps.filter(x => x.to_user === yoU), deMi = swaps.filter(x => x.from_user === yoU);
+  const zonaDe = idA => asg.find(a => a.id === idA)?.zone || 'su zona';
+  const propuestasHtml = mias.map(x => `<div class="propuesta" role="group" aria-label="Propuesta de cambio de turno">
+      <p style="margin:0 0 8px"><b>🔁 ${esc(nombreMiembro(x.from_user))} te propone cambiar el turno.</b><br>
+      ${x.to_assignment ? `Tú harías <b>${esc(zonaDe(x.from_assignment))}</b> y ${esc(nombreMiembro(x.from_user))} haría <b>${esc(zonaDe(x.to_assignment))}</b>.`
+        : `Tú harías <b>${esc(zonaDe(x.from_assignment))}</b>${asg.some(a => a.user_id === yoU) ? ' además de lo tuyo' : ' (esta semana no tenías zona)'}.`}</p>
+      <div class="row"><button class="btn small" data-swap-ok="${esc(x.id)}">Aceptar</button><button class="btn small ghost" data-swap-no="${esc(x.id)}">Rechazar</button></div></div>`).join('');
+  const extraFila = a => {
+    const mine = a.user_id === yoU;
+    if (a.is_done) return '';
+    if (mine){
+      const p = deMi.find(x => x.from_assignment === a.id);
+      if (p) return `<span class="meta-line small dim">Propuesto a ${esc(nombreMiembro(p.to_user))} · <button type="button" class="link" data-swap-cancel="${esc(p.id)}" style="min-height:0;padding:0">Cancelar</button></span>`;
+      if (S.cambio === a.id) return `<div class="cambio" role="group" aria-label="Cambiar turno"><label class="small" style="font-weight:800">¿Con quién?
+          <select id="cambioQuien">${S.members.filter(m => m.id !== yoU).map(m => { const z = asg.find(x => x.user_id === m.id && !x.is_done);
+            return `<option value="${esc(m.id)}">${esc(m.name)}${z ? ' (' + esc(z.zone) + ')' : ' (sin zona)'}${fueraSemana(m.id) ? ' · fuera' : ''}</option>`; }).join('')}</select></label>
+        <div class="row"><button class="btn small" data-cambio-ok="${esc(a.id)}">Proponer</button><button class="btn small ghost" data-cambio-no>Cancelar</button></div>
+        <small class="dim">Si acepta, os cambiáis las zonas. Si no tiene zona, se queda la tuya.</small></div>`;
+      return `<span class="meta-line"><button type="button" class="link" data-cambiar="${esc(a.id)}" style="min-height:32px">🔁 Cambiar turno</button></span>`;
+    }
+    return apurado ? `<span class="meta-line"><button type="button" class="link" data-recordar="${esc(a.id)}" style="min-height:32px">📣 Recordárselo</button></span>` : '';
+  };
   const from = curMonday(); from.setDate(from.getDate()-7*7);
   let hist = [];
   try{ hist = await S.api.history(S.apt.id, iso(from)); }catch{ hist = null; }
@@ -2852,6 +2973,7 @@ async function renderLimpieza(){
   app.innerHTML = `${header('Limpieza')}${subtabsHtml('limpieza')}
     <section class="sec" id="semana">
       <div class="sec-head"><h2>Esta semana</h2><span class="count">${done} de ${asg.length} hechas</span></div>
+      ${propuestasHtml}
       <p class="sub">Semana del ${esc(range)}. Cada lunes las zonas pasan al compañero anterior de la lista y nadie repite la zona de la semana pasada. El reparto se genera la primera vez que alguien abre la app esa semana.</p>
       ${descansan.length ? `<p class="sub" style="margin-top:-4px">Sin zona esta semana: <b>${esc(descansan.join(', '))}</b>. El descanso también va rotando.</p>` : ''}
       ${asg.length ? `<div class="seg" aria-hidden="true">${asg.map(a => `<i class="${a.is_done?'on '+mc(a.user_id):''}"></i>`).join('')}</div>` : ''}
@@ -2859,7 +2981,8 @@ async function renderLimpieza(){
         <li><button class="check" aria-pressed="${a.is_done}" data-a="${esc(a.id)}" ${mine?'':'disabled'} aria-label="${esc(a.zone)}: ${a.is_done?'hecha':'pendiente'}">${CHECK}</button>
           <span class="grow"><span class="name ${a.is_done?'done':''}">${esc(a.zone)}</span>
             <span class="meta-line"><span class="chip mag persona ${mc(a.user_id)}">${fotoChip(a.user_id, 1)}${quienChip(a.user_id, a.name)}</span>
-              <span class="state ${a.is_done?'ok':''}">${a.is_done ? esc(doneLabel(a.done_at)) : 'Pendiente'}</span></span></span></li>`; }).join('')
+              <span class="state ${a.is_done ? 'ok' : (apurado ? 'tarde' : '')}">${a.is_done ? esc(doneLabel(a.done_at)) : (apurado ? `Sin hacer · ${quedan <= 0 ? 'último día' : quedan === 1 ? 'queda 1 día' : 'quedan ' + quedan + ' días'}` : 'Pendiente')}</span></span>
+            ${extraFila(a)}</span></li>`; }).join('')
         : `<li class="empty">${S.members.length < 2 ? esc(SOLO_UNO) : (zones.length ? 'Todavía no hay reparto esta semana. Recarga la página.' : 'Define las zonas de la casa y aquí aparecerá quién limpia cada una.')}</li>`}</ul>
     </section>
     <section class="sec" id="zonas">
@@ -2879,6 +3002,29 @@ async function renderLimpieza(){
   });
   app.querySelectorAll('[data-a]').forEach(b => b.onclick = async () => {
     try{ await S.api.setDone(b.dataset.a, b.getAttribute('aria-pressed') !== 'true'); await renderLimpieza(); }catch(err){ toast(friendly(err)); }
+  });
+  // Cambio de turno
+  app.querySelectorAll('[data-cambiar]').forEach(b => b.onclick = async () => { S.cambio = b.dataset.cambiar; await renderLimpieza(); $('#cambioQuien')?.focus(); });
+  app.querySelectorAll('[data-cambio-no]').forEach(b => b.onclick = async () => { S.cambio = null; await renderLimpieza(); });
+  app.querySelectorAll('[data-cambio-ok]').forEach(b => b.onclick = async () => {
+    const to = $('#cambioQuien').value; b.disabled = true;
+    try{ await S.api.requestSwap(b.dataset.cambioOk, to); S.cambio = null; toast(`Propuesta enviada a ${nombreMiembro(to)}. Si acepta, os cambiáis el turno.`); await renderLimpieza(); }
+    catch(err){ b.disabled = false; toast(friendly(err)); }
+  });
+  const responder = (attr, ok_, msg) => app.querySelectorAll('[' + attr + ']').forEach(b => b.onclick = async () => {
+    b.disabled = true;
+    try{ await S.api.answerSwap(b.getAttribute(attr), ok_); toast(msg); }catch(err){ toast(friendly(err)); }
+    await renderLimpieza();
+  });
+  responder('data-swap-ok', true, 'Turno cambiado. Ya te sale tu nueva zona.');
+  responder('data-swap-no', false, 'Propuesta rechazada.');
+  responder('data-swap-cancel', false, 'Propuesta cancelada.');
+  // Recordar a quien no ha hecho su zona (WhatsApp o lo que tenga el móvil)
+  app.querySelectorAll('[data-recordar]').forEach(b => b.onclick = async () => {
+    const a = asg.find(x => x.id === b.dataset.recordar); if (!a) return;
+    const texto = `¡Hola ${nombreMiembro(a.user_id)}! Esta semana te toca limpiar ${a.zone} en ${S.apt.name} y ${quedan <= 0 ? 'hoy es el último día' : quedan === 1 ? 'queda 1 día' : 'quedan ' + quedan + ' días'} 🧽`;
+    if (navigator.share){ try{ await navigator.share({text:texto}); return; }catch(e){ if (e && e.name === 'AbortError') return; } }
+    window.open('https://wa.me/?text=' + encodeURIComponent(texto), '_blank', 'noopener');
   });
 }
 
@@ -2994,6 +3140,11 @@ function saldosHtml(bal){
   </section>`;
 }
 
+// Ausencias cargadas del piso actual (S.ausencias): quién está fuera y hasta cuándo
+async function cargarAusencias(){ try{ S.ausencias = await S.api.absences(S.apt.id); }catch{ S.ausencias = S.ausencias || []; } return S.ausencias; }
+const ausenciaDe = (u, dia = iso(new Date())) => (S.ausencias || []).find(x => x.user_id === u && x.start_date <= dia && x.end_date >= dia);
+const fueraHoy = u => !!ausenciaDe(u);
+const fechaCorta = d => new Date(d + 'T00:00:00').toLocaleDateString('es-ES', {day:'numeric', month:'short'});
 const nombreMiembro = u => (S.members.find(m => m.id === u) || {}).name || 'alguien';
 const TIPO_REPARTO = {equal:'A partes iguales', exact:'Por importes', percentage:'Por porcentajes'};
 // Parte de cada uno al céntimo: 10 € entre 3 → 3,34 · 3,33 · 3,33 (la suma da siempre el total)
@@ -3034,7 +3185,7 @@ function formGastoHtml(){
       </fieldset>
       <fieldset id="gPart" class="parts">
         <legend>¿Quién participa?</legend>
-        ${S.members.map(m => `<div class="part-row"><label><input type="checkbox" value="${esc(m.id)}" ${!ed || parte(m.id) ? 'checked' : ''}> ${esc(m.id === yo ? m.name + ' (tú)' : m.name)}</label>
+        ${S.members.map(m => `<div class="part-row"><label><input type="checkbox" value="${esc(m.id)}" ${(ed ? parte(m.id) : (m.id === yo || !fueraHoy(m.id))) ? 'checked' : ''}> ${esc(m.id === yo ? m.name + ' (tú)' : m.name)}${!ed && m.id !== yo && fueraHoy(m.id) ? ' <span class="small dim">· fuera</span>' : ''}</label>
           <input class="part-val" type="number" inputmode="decimal" min="0" step="0.01" data-u="${esc(m.id)}" aria-label="${tipo === 'percentage' ? 'Porcentaje' : 'Importe'} de ${esc(m.name)}" placeholder="${tipo === 'percentage' ? '%' : '€'}" value="${esc(valor(m.id))}" ${tipo === 'equal' ? 'hidden' : ''}>
           <span class="part-cuota" ${tipo === 'equal' ? '' : 'hidden'}></span></div>`).join('')}
         <small class="err" id="ePart" role="alert" hidden></small>
