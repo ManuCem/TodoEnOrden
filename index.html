@@ -2375,24 +2375,20 @@ function quienAvisa(i){
   const quien = !i.low_by ? 'Alguien avisó' : i.low_by === S.api.uid ? 'Avisaste tú' : `Avisó ${S.members.find(m => m.id === i.low_by)?.name || 'un antiguo compañero'}`;
   return i.low_at ? `${quien} · ${dayLabel(i.low_at).toLowerCase()}` : quien;
 }
-// Productos de despensa que se ofrecen con un toque: lo que ya se ha comprado en este piso y, si faltan, los básicos
-const DESPENSA_BASE = ['Papel higiénico','Detergente','Aceite','Lavavajillas','Bolsas de basura','Sal','Café','Azúcar'];
+// Productos que se ofrecen con un toque en «¿Se os acaba algo?»: todo lo que hay en «Ya comprado», sin repetir y por orden alfabético
 function despensaNombres(items){
-  const ya = new Set(items.filter(i => !i.is_bought && i.running_low).map(i => norm(i.name).trim()));
+  const ya = new Set(items.filter(i => !i.is_bought && i.running_low).map(i => norm(i.name).trim()));   // ya avisado: no se ofrece otra vez
   const vistos = new Set(), res = [];
-  const comprados = items.filter(i => i.is_bought).sort((a,b) => String(b.bought_at||'').localeCompare(String(a.bought_at||''))).map(i => i.name);
-  // un básico ("Aceite") se enlaza con el producto que el piso ya tenga ("Aceite de oliva") para no duplicarlo
-  const base = DESPENSA_BASE.map(n => { const k = norm(n).trim(); const ex = items.find(i => { const t = norm(i.name).trim(); return t.includes(k) || k.includes(t); }); return ex ? ex.name : n; });
-  for (const n of [...base, ...comprados]){
-    const k = norm(n).trim(); if (!k || vistos.has(k)) continue; vistos.add(k);
-    if (!ya.has(k)) res.push(n);
+  for (const i of items.filter(x => x.is_bought && !x.ticket)){
+    const k = norm(i.name).trim(); if (!k || vistos.has(k)) continue; vistos.add(k);
+    if (!ya.has(k)) res.push(i.name);
   }
-  return res.slice(0, 8);
+  return res.sort((x, y) => x.localeCompare(y, 'es', {sensitivity:'base'}));
 }
 function despensaHtml(items){
   const n = despensaNombres(items);
   if (!n.length) return '';
-  return `<details class="despensa"${S.despAbierta ? ' open' : ''}><summary>⚠ ¿Se os acaba algo? <span class="small dim">Avisa con un toque</span></summary>
+  return `<details class="despensa"${S.despAbierta ? ' open' : ''}><summary>⚠ ¿Se os acaba algo? <span class="small dim">Avisa con un toque · ${n.length}</span></summary>
     <p class="small dim">Toca un producto: sube arriba de la lista como prioritario hasta que se compre.</p>
     <div class="chips">${n.map(x => `<button type="button" class="despchip" data-lowname="${esc(x)}">${esc(x)}</button>`).join('')}</div></details>`;
 }
