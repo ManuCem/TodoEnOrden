@@ -1069,7 +1069,7 @@ function demoApi(clave){
     myBalance:()=>wait(P.saldo),
     items:()=>wait(db.items.slice().sort((a,b)=>a.is_bought-b.is_bought || b.created_at.localeCompare(a.created_at)).map(i => {
       const g = i.expense_id ? db.manual.find(x => x.id === i.expense_id) : null; return {...i, expense: g ? {amount:g.amount, deleted_at:null} : null}; })),
-    addItem:(a,name)=>{ if (db.items.some(i=>i.name.toLowerCase()===name.toLowerCase())) return Promise.reject({code:'23505',message:'dup'}); db.items.push({id:id('i'),name,is_bought:false,running_low:false,created_at:new Date().toISOString()}); return wait(); },
+    addItem:(a,name)=>{ db.items.push({id:id('i'),name,is_bought:false,running_low:false,created_at:new Date().toISOString()}); return wait(); },
     setBought:(i,v)=>{ const x = db.items.find(y=>y.id===i); if (!x) return Promise.reject(new Error('Ese producto ya no está en la lista.'));
       if (!v && x.is_bought){ const err = quitarGastoCompra(x); if (err) return Promise.reject(new Error(err)); x.expense_id = null; }
       if (v && !x.is_bought){ x.bought_by = me; x.bought_at = new Date().toISOString(); } if (!v){ x.bought_by = null; x.bought_at = null; }
@@ -1078,13 +1078,12 @@ function demoApi(clave){
       if (x.is_bought) return Promise.reject(new Error('Ese producto ya está comprado.'));
       x.running_low = !!v; x.low_by = v ? me : null; x.low_at = v ? new Date().toISOString() : null; return wait(); },
     reportLow:(a,name)=>{ name = String(name || '').trim(); if (!name || name.length > 80) return Promise.reject(new Error('Escribe el nombre del producto (máximo 80 letras)'));
-      let x = db.items.find(y => y.name.trim().toLowerCase() === name.toLowerCase());
+      let x = db.items.find(y => !y.is_bought && y.name.trim().toLowerCase() === name.toLowerCase());   // lo ya comprado se queda en el histórico
       if (!x){ x = {id:id('i'), name, is_bought:false, created_at:new Date().toISOString()}; db.items.push(x); }
-      else if (x.is_bought){ x.is_bought = false; x.bought_by = null; x.bought_at = null; x.expense_id = null; }   // el gasto anotado se queda en Gastos
       if (!x.running_low){ x.running_low = true; x.low_by = me; x.low_at = new Date().toISOString(); }
       return wait(x.id); },
     delItem:i=>{ const x = db.items.find(y=>y.id===i); const err = x && quitarGastoCompra(x); if (err) return Promise.reject(new Error(err)); db.items=db.items.filter(y=>y.id!==i); return wait(); },
-    renameItem:(i,name)=>{ if (db.items.some(x=>x.id!==i && x.name.toLowerCase()===name.toLowerCase())) return Promise.reject({code:'23505',message:'dup'}); db.items.find(x=>x.id===i).name=name; return wait(); },
+    renameItem:(i,name)=>{ db.items.find(x=>x.id===i).name=name; return wait(); },
     zones:()=>wait(db.zones.slice()),
     addZone:(a,name)=>{ if (db.zones.some(z=>z.name.toLowerCase()===name.toLowerCase())) return Promise.reject({code:'23505',message:'dup'}); db.zones.push({id:id('z'),name}); return wait(); },
     delZone:i=>{ db.zones=db.zones.filter(x=>x.id!==i); return wait(); },
@@ -2560,7 +2559,12 @@ async function renderCompra(){
   if (qc){ const f = () => { S.qCompra = qc.value; filtrarCompra(); }; qc.addEventListener('input', f); filtrarCompra(); }
 
   const dsp = app.querySelector('details.despensa'); if (dsp) dsp.addEventListener('toggle', () => { S.despAbierta = dsp.open; });
-  $('#fItem').onsubmit = e => run(e, async () => { await S.api.addItem(S.apt.id, $('#itemName').value.trim()); await renderCompra(); });
+  $('#fItem').onsubmit = e => run(e, async () => {
+    const nombre = $('#itemName').value.trim(), k = norm(nombre).trim();
+    const yaPend = pend.some(i => norm(i.name).trim() === k);
+    await S.api.addItem(S.apt.id, nombre); await renderCompra();
+    if (yaPend) toast(`«${nombre}» ya estaba en Por comprar: lo has apuntado otra vez.`);
+  });
   // si tenía su gasto anotado, al destacharlo o quitarlo se elimina ese gasto (nadie sigue debiendo por él)
   const conGasto = idi => { const it = items.find(x => x.id === idi); return it && it.expense && !it.expense.deleted_at ? it : null; };
   app.querySelectorAll('[data-b]').forEach(b => b.onclick = async () => {
