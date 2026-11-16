@@ -293,6 +293,19 @@ input.invalid,select.invalid{border-color:var(--bad)}
 .resumen small{display:block;font-size:12px;color:var(--muted);font-weight:700}
 .resumen .mio{border-color:var(--accent)}
 .resumen .full{grid-column:1/-1}
+.ticket-form{display:grid;gap:10px;border:1.5px solid var(--line);border-radius:14px;padding:12px;margin:8px 0 12px;background:var(--paper)}
+.ticket-form label{display:grid;gap:4px;font-weight:800;font-size:14px}
+.foto-ticket{cursor:pointer}
+.tk-prev{display:flex;align-items:center;justify-content:center;min-height:96px;border:2px dashed var(--line);border-radius:12px;color:var(--muted);font-weight:800;text-align:center;padding:8px;overflow:hidden}
+.tk-prev img{max-width:100%;max-height:180px;border-radius:8px;display:block}
+.tk-quien{border:0;margin:0;padding:0;display:flex;flex-wrap:wrap;gap:6px 14px}
+.tk-quien legend{font-weight:800;font-size:14px;margin-bottom:4px;padding:0}
+.tk-quien .chk{display:flex;align-items:center;gap:6px;font-weight:600;min-height:36px}
+.tk-quien .chk input{width:20px;height:20px}
+.tk-items{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0 10px;max-height:216px;overflow:auto;border:1.5px solid var(--line);border-radius:12px;padding:6px 10px}
+.tk-items legend{float:left;width:100%;grid-column:1/-1}
+.tk-items .chk{font-size:14px;line-height:1.2;min-height:40px}
+.sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
 .parati .list li{padding:0}
 .parati-btn{display:flex;align-items:center;gap:12px;width:100%;min-height:56px;padding:8px 2px;background:none;border:0;color:inherit;font:inherit;text-align:left;cursor:pointer}
 .parati-btn .ico{font-size:20px;width:28px;text-align:center;flex:none}
@@ -748,17 +761,25 @@ function remoteApi(sb, uid){
     },
     // TEO-28: gastos anotados a mano (los de facturas van aparte). Se reparten a partes iguales.
     async expenses(aptId){
-      const rows = ok(await sb.from('expenses').select('id,description,amount,expense_date,paid_by,created_by,created_at,split_type,expense_shares(user_id,amount,percentage)')
+      const rows = ok(await sb.from('expenses').select('id,description,amount,expense_date,paid_by,created_by,created_at,split_type,receipt_path,expense_shares(user_id,amount,percentage)')
         .eq('apartment_id', aptId).is('recurring_bill_id', null).is('deleted_at', null)
         .order('expense_date',{ascending:false}).order('created_at',{ascending:false}).limit(50));
       return rows.map(e => ({id:e.id, name:e.description, amount:Number(e.amount), date:e.expense_date, paid_by:e.paid_by, created_by:e.created_by, created_at:e.created_at,
-        split:e.split_type === 'excluding' ? 'equal' : (e.split_type || 'equal'),
+        receipt:e.receipt_path || null, split:e.split_type === 'excluding' ? 'equal' : (e.split_type || 'equal'),
         shares:(e.expense_shares || []).map(x => ({user_id:x.user_id, amount:Number(x.amount), percentage:x.percentage == null ? null : Number(x.percentage)}))}));
     },
     async addExpense(aptId, g){
       return ok(await sb.rpc('create_expense', {p_apartment_id:aptId, p_description:g.description, p_amount:g.amount, p_paid_by:g.paid_by,
-        p_split_type:g.split || 'equal', p_participants:g.participants, p_values:g.values || null, p_expense_date:g.date}));
+        p_split_type:g.split || 'equal', p_participants:g.participants, p_values:g.values || null, p_expense_date:g.date, p_receipt_path:g.receipt || null}));
     },
+    // TEO-20: la foto del ticket va al bucket privado «receipts», en la carpeta del piso (así solo la ven los del piso)
+    async uploadReceipt(aptId, blob){
+      const path = `${aptId}/${(crypto.randomUUID ? crypto.randomUUID() : Date.now() + '-' + Math.random().toString(36).slice(2))}.jpg`;
+      ok(await sb.storage.from('receipts').upload(path, blob, {contentType:'image/jpeg', upsert:false}));
+      return path;
+    },
+    async delReceipt(path){ await sb.storage.from('receipts').remove([path]); },
+    async receiptUrl(path){ const r = ok(await sb.storage.from('receipts').createSignedUrl(path, 300)); return r.signedUrl; },
     // Saldar deudas: un pago de una persona a otra (lo anota quien paga o quien cobra)
     async payments(aptId){ return ok(await sb.from('payments').select('id,from_user,to_user,amount,note,paid_at,created_by').eq('apartment_id', aptId).order('paid_at',{ascending:false}).limit(100)) || []; },
     async addPayment(aptId, p){ ok(await sb.from('payments').insert({apartment_id:aptId, from_user:p.from, to_user:p.to, amount:p.amount, note:'Saldar deuda'})); },
@@ -1105,8 +1126,11 @@ function demoApi(clave){
       if (!g.participants || !g.participants.length) return Promise.reject(new Error('Tiene que haber al menos un participante'));
       if (!db.members.some(m => m.id === g.paid_by)) return Promise.reject(new Error('El pagador no pertenece al piso'));
       const shares = calcularGasto(g); if (typeof shares === 'string') return Promise.reject(new Error(shares));
-      db.manual.push({id:id('g'), name:g.description, amount:Math.round(g.amount*100)/100, date:g.date, paid_by:g.paid_by, created_by:me, created_at:new Date().toISOString(), split:g.split || 'equal', shares});
+      db.manual.push({id:id('g'), name:g.description, amount:Math.round(g.amount*100)/100, date:g.date, paid_by:g.paid_by, created_by:me, created_at:new Date().toISOString(), split:g.split || 'equal', shares, receipt:g.receipt || null});
       return wait(); },
+    uploadReceipt:(a, blob)=>{ const k = 'demo/' + id('t'); (db.recibos ||= {})[k] = URL.createObjectURL(blob); return wait(k); },
+    delReceipt:k=>{ if (db.recibos) delete db.recibos[k]; return wait(); },
+    receiptUrl:k=>db.recibos && db.recibos[k] ? wait(db.recibos[k]) : Promise.reject(new Error('Ese ticket ya no está disponible')),
     payments:()=>wait(db.payments.slice().sort((a,b) => b.paid_at.localeCompare(a.paid_at))),
     addPayment:(a, p)=>{ if (p.from !== me && p.to !== me) return Promise.reject(new Error('Solo puedes anotar pagos en los que participas'));
       db.payments.push({id:id('p'), from_user:p.from, to_user:p.to, amount:p.amount, note:'Saldar deuda', paid_at:new Date().toISOString(), created_by:me}); return wait(); },
@@ -1155,7 +1179,11 @@ function demoApi(clave){
       const hoy = iso(new Date()); let n = 0;
       db.bills.filter(b => !b.is_paused && db.members.some(m => m.id === b.paid_by)).forEach(b => {
         for (let k = 0; b.next_due_date <= hoy && k < 24; k++){
-          if (!db.gastos.some(g => g.bill_id === b.id && g.date === b.next_due_date) && !db.borrados.includes(b.id + '|' + b.next_due_date)){ crearGasto(b, b.next_due_date); n++; }
+          const mismoPeriodo = g => g.bill_id === b.id && (b.frequency === 'weekly' ? g.date === b.next_due_date : g.date.slice(0,7) === b.next_due_date.slice(0,7));
+          const ya = db.gastos.find(mismoPeriodo);
+          if (ya){ if (ya.date !== b.next_due_date || ya.paid_by !== b.paid_by || ya.amount !== Number(b.amount)){   // editar la factura no duplica: se actualiza el gasto de ese mes
+              db.gastos = db.gastos.filter(g => g !== ya); db.pagos = db.pagos.filter(x => !(x.bill_id === b.id && x.due_date === ya.date)); crearGasto(b, b.next_due_date); } }
+          else if (!db.borrados.some(k => k.startsWith(b.id + '|' + b.next_due_date.slice(0,7)))){ crearGasto(b, b.next_due_date); n++; }
           b.next_due_date = shiftDue(b.next_due_date, b.frequency);
         }
       });
@@ -1498,7 +1526,7 @@ let ultimaCarga = Date.now();
 // No se recarga la pantalla si estás escribiendo, con un formulario abierto o confirmando algo
 function estaOcupado(){
   return !!(S.gastoForm || S.billForm || S.editBill || S.editItem || S.normaForm || S.avisoForm || S.echar || S.saldar ||
-    S.movDel || S.gastoEdit || S.billDel || S.normaDel || S.avisoDel || S.precioItem || S.compraPrecio ||
+    S.movDel || S.gastoEdit || S.billDel || S.normaDel || S.avisoDel || S.precioItem || S.compraPrecio || S.ticket ||
     (document.activeElement && document.activeElement.matches && document.activeElement.matches('input,textarea,select')));
 }
 /* ---------- Cambios en directo (Supabase Realtime) ----------
@@ -2378,7 +2406,51 @@ function precioCompra(i){
       <small class="err" id="ePrecio" role="alert" hidden style="flex-basis:100%"></small></form>`;
   return `<br><button type="button" class="link" data-precio-abrir="${esc(i.id)}" style="min-height:36px">¿Cuánto costó? Anótalo como gasto</button>`;
 }
+// TEO-20: las fotos del móvil pesan mucho; se reducen a 1600 px y JPEG antes de subirlas (≈200-400 KB)
+async function comprimirFoto(file){
+  if (!file || !/^image\//.test(file.type || 'image/')) throw new Error('El ticket tiene que ser una foto (JPG o PNG).');
+  const url = URL.createObjectURL(file);
+  try{
+    const img = await new Promise((ok_, ko) => { const im = new Image(); im.onload = () => ok_(im); im.onerror = () => ko(new Error('No se puede leer esa foto. Prueba con una en JPG o PNG.')); im.src = url; });
+    const k = Math.min(1, 1600 / Math.max(img.naturalWidth, img.naturalHeight));
+    const c = document.createElement('canvas'); c.width = Math.round(img.naturalWidth * k); c.height = Math.round(img.naturalHeight * k);
+    c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+    const blob = await new Promise(r => c.toBlob(r, 'image/jpeg', 0.8));
+    if (!blob) throw new Error('No se ha podido preparar la foto.');
+    return blob;
+  } finally { URL.revokeObjectURL(url); }
+}
+async function abrirTicket(path){
+  const w = window.open('', '_blank');   // se abre ya (si no, el navegador lo bloquea) y luego se carga la foto
+  try{ const u = await S.api.receiptUrl(path); if (w) w.location = u; else location.href = u; }
+  catch(err){ if (w) w.close(); toast(friendly(err)); }
+}
+const parseImporte = t => { const x = String(t || '').trim().replace(/\s/g, '').replace(/\.(?=\d{3}(\D|$))/g, '').replace(',', '.'); const n = Math.round(parseFloat(x) * 100) / 100; return isFinite(n) ? n : NaN; };
+function filaTicket(i){
+  return `<li data-busca="${esc(norm('ticket ' + i.name))}"><span class="mag-dot mag ${mc(i.bought_by)}" aria-hidden="true">🧾</span>
+    <span class="grow"><span class="name">${esc(i.name)}</span><br><span class="small dim">Ticket · ${i.bought_by === S.api.uid ? 'lo subiste tú' : 'lo subió ' + esc(nombreMiembro(i.bought_by))} · ${esc(dayLabel(i.bought_at))}</span></span>
+    <span class="right" style="text-align:right"><b>${eur(i.expense.amount)}</b><br><button type="button" class="link" data-ver-ticket="${esc(i.receipt)}">Ver ticket</button></span></li>`;
+}
+function ticketFormHtml(pend){
+  return `<form id="fTicket" class="ticket-form" novalidate aria-label="Subir ticket">
+    <h3 class="wk" style="margin-top:0">🧾 Subir ticket</h3>
+    <label class="foto-ticket" for="tkFoto"><span id="tkPrev" class="tk-prev">📷 Hacer foto o elegir del móvil</span></label>
+    <input id="tkFoto" type="file" accept="image/*" capture="environment" class="sr-only">
+    <small class="err" id="eTkFoto" role="alert" hidden></small>
+    <label>Importe total del ticket<input id="tkImporte" type="text" inputmode="decimal" autocomplete="off" placeholder="0,00 €" aria-describedby="eTkImp"></label>
+    <small class="err" id="eTkImp" role="alert" hidden></small>
+    <label>Concepto<input id="tkDesc" maxlength="80" value="Compra del súper"></label>
+    <fieldset class="tk-quien"><legend>Se reparte a partes iguales entre</legend>
+      ${S.members.map(m => `<label class="chk"><input type="checkbox" name="tkP" value="${esc(m.id)}" checked> ${esc(m.id === S.api.uid ? 'Tú' : m.name)}</label>`).join('')}</fieldset>
+    <small class="err" id="eTkP" role="alert" hidden></small>
+    ${pend.length ? `<fieldset class="tk-quien tk-items"><legend>¿Qué has comprado con este ticket? (opcional, se tacha)</legend>
+      ${pend.map(i => `<label class="chk"><input type="checkbox" name="tkI" value="${esc(i.id)}"> ${esc(i.name)}</label>`).join('')}</fieldset>` : ''}
+    <p class="small dim" style="margin:0">Pagas tú el ticket entero y se crea un gasto repartido. Lo verás en Gastos con su foto.</p>
+    <div class="row"><button class="btn" type="submit">Guardar ticket</button><button class="btn ghost" type="button" id="tkNo">Cancelar</button></div>
+  </form>`;
+}
 function filaCompra(i){
+  if (i.ticket) return filaTicket(i);
   if (!i.is_bought && S.compraPrecio === i.id) return `
     <li style="display:block" data-busca="${esc(norm(i.name + ' ' + (i.running_low ? 'se acaba' : '')))}"><span class="name">${esc(i.name)}</span>
       <form class="precio" data-compra="${esc(i.id)}" novalidate>
@@ -2421,7 +2493,11 @@ async function renderCompra(){
     .map(i => ocultos.has('u:' + i.id) ? {...i, is_bought:false, bought_by:null, bought_at:null, expense:null} : i);
   const pend = items.filter(i => !i.is_bought);
   const bajos = pend.filter(i => i.running_low).sort((a,b) => String(b.low_at||'').localeCompare(String(a.low_at||'')));
-  const comprados = items.filter(i => i.is_bought).sort((a,b) => String(b.bought_at||'').localeCompare(String(a.bought_at||'')));
+  const comprados0 = items.filter(i => i.is_bought);
+  // TEO-20: los tickets subidos cuentan en «Ya comprado» como una fila más (con su importe y su foto)
+  const tks = (await S.api.expenses(S.apt.id).catch(() => [])).filter(g => g.receipt && !ocultos.has('m:g:' + g.id))
+    .map(g => ({ticket:true, id:'t' + g.id, name:g.name, bought_by:g.paid_by, bought_at:g.created_at, expense:{amount:g.amount}, receipt:g.receipt}));
+  const comprados = [...comprados0, ...tks].sort((a,b) => String(b.bought_at||'').localeCompare(String(a.bought_at||'')));
 
   // agrupar los pendientes por día, del más reciente al más antiguo
   const dias = [];
@@ -2468,6 +2544,7 @@ async function renderCompra(){
         <input id="itemName" maxlength="80" placeholder="Añadir producto: leche, pan…" aria-label="Producto" required>
         <button class="btn" type="submit">Añadir</button>
       </form>
+      ${S.ticket ? ticketFormHtml(pend) : `<button type="button" class="btn ghost" id="tkAbrir" style="width:100%;margin:4px 0 8px">🧾 Subir ticket de la compra</button>`}
       ${bajos.length ? `<div class="day low">⚠ Se está acabando <span class="n">${bajos.length}</span></div>
         <ul class="list">${bajos.map(filaCompra).join('')}</ul>` : ''}
       ${despensaHtml(items)}
@@ -2524,6 +2601,46 @@ async function renderCompra(){
     const idd = b.dataset.d, x = items.find(y => y.id === idd), it = conGasto(idd);
     conDeshacer('i:' + idd, `«${x?.name || 'Producto'}» quitado${it ? ` y su gasto de ${eur(it.expense.amount)}` : ''}.`, () => S.api.delItem(idd), () => { if (S.tab === 'compra') renderCompra(); });
   });
+  app.querySelectorAll('[data-ver-ticket]').forEach(b => b.onclick = () => abrirTicket(b.dataset.verTicket));
+  const tkA = $('#tkAbrir'); if (tkA) tkA.onclick = async () => { S.ticket = true; S.compraPrecio = null; S.editItem = null; await renderCompra(); $('#fTicket')?.scrollIntoView({block:'start'}); };
+  const ft = $('#fTicket');
+  if (ft){
+    let foto = null;
+    $('#tkNo').onclick = async () => { S.ticket = null; await renderCompra(); };
+    $('#tkFoto').onchange = async e => {
+      const f = e.target.files && e.target.files[0], er = $('#eTkFoto'), prev = $('#tkPrev'); er.hidden = true;
+      if (!f) return;
+      prev.textContent = 'Preparando la foto…';
+      try{ foto = await comprimirFoto(f); const u = URL.createObjectURL(foto); prev.innerHTML = `<img src="${u}" alt="Foto del ticket">`; }
+      catch(err){ foto = null; prev.textContent = '📷 Hacer foto o elegir del móvil'; er.textContent = err.message; er.hidden = false; }
+    };
+    $('#tkImporte').addEventListener('input', () => { $('#eTkImp').hidden = true; });
+    ft.onsubmit = async e => {
+      e.preventDefault();
+      const amount = parseImporte($('#tkImporte').value);
+      const parts = [...ft.querySelectorAll('input[name=tkP]:checked')].map(x => x.value);
+      const tachar = [...ft.querySelectorAll('input[name=tkI]:checked')].map(x => x.value);
+      let mal = false;
+      if (!foto){ const er = $('#eTkFoto'); er.textContent = 'Sube la foto del ticket.'; er.hidden = false; mal = true; }
+      if (!(amount > 0)){ const er = $('#eTkImp'); er.textContent = 'Indica el importe del ticket (más de 0 €).'; er.hidden = false; if (!mal) $('#tkImporte').focus(); mal = true; }
+      if (!parts.length){ const er = $('#eTkP'); er.textContent = 'Elige al menos una persona.'; er.hidden = false; mal = true; }
+      if (mal) return;
+      const btn = ft.querySelector('button[type=submit]'); btn.disabled = true; btn.textContent = 'Subiendo…';
+      let path = null;
+      try{
+        path = await S.api.uploadReceipt(S.apt.id, foto);
+        const desc = $('#tkDesc').value.trim() || 'Compra del súper';
+        await S.api.addExpense(S.apt.id, {description:desc, amount, paid_by:S.api.uid, split:'equal', participants:parts, date:iso(new Date()), receipt:path});
+      }catch(err){
+        if (path) S.api.delReceipt(path).catch(() => {});   // si el gasto no se crea, no se queda la foto suelta
+        btn.disabled = false; btn.textContent = 'Guardar ticket'; toast(friendly(err)); return;
+      }
+      for (const idt of tachar){ try{ await S.api.setBought(idt, true); }catch{} }
+      S.ticket = null;
+      toast(`Ticket guardado: ${eur(amount)} entre ${parts.length}. Lo verás en Gastos.`);
+      await renderCompra();
+    };
+  }
   app.querySelectorAll('[data-cper]').forEach(b => b.onclick = async () => { S.compraPeriodo = b.dataset.cper; await renderCompra(); });
   app.querySelectorAll('[data-cfiltro]').forEach(b => b.onclick = async () => { S.compraFiltro = b.dataset.cfiltro; await renderCompra(); });
   app.querySelectorAll('[data-compra-no]').forEach(b => b.onclick = async () => { S.compraPrecio = null; await renderCompra(); });
@@ -2899,6 +3016,7 @@ function movimientosHtml(mov){
         <span class="right"><span class="amount">${eur(g.amount)}</span><span class="small dim">${resumen}</span></span></span>
       ${chipsReparto(g, u => u === g.paid_by)}
       ${noParticipa(g)}
+      ${g.receipt ? `<span class="meta-line"><button type="button" class="btn small ghost" data-ver-ticket="${esc(g.receipt)}">🧾 Ver ticket</button></span>` : ''}
       ${irSaldos(g)}
       ${g.created_by === yo || g.paid_by === yo ? borrar(m, `Eliminar «${esc(g.name)}» (${eur(g.amount)})`, g.id) : ''}</li>`;
   };
@@ -3029,7 +3147,7 @@ function facturasHtml(bills, pagos, gastos = []){
         <label>${ed ? 'Próximo vencimiento' : 'Fecha de vencimiento'}<input id="bDate" type="date" value="${ed ? esc(ed.next_due_date) : ''}"><small class="err" id="eDate" role="alert" hidden></small></label>
         <label>La adelanta<select id="bPaid">${ed && !S.members.some(m => m.id === ed.paid_by) ? `<option value="${esc(ed.paid_by)}" selected>Antiguo compañero</option>` : ''}${S.members.map(m => `<option value="${esc(m.id)}" ${m.id === (ed ? ed.paid_by : yo) ? 'selected' : ''}>${esc(m.name)}</option>`).join('')}</select><small class="err" id="ePaid" role="alert" hidden></small></label>
       </div>
-      ${ed && !ed.is_paused ? '<p class="small dim" style="margin:0">Si pones una fecha ya pasada, al guardar se crearán los gastos de esos vencimientos con el importe nuevo.</p>' : ''}
+      ${ed && !ed.is_paused ? '<p class="small dim" style="margin:0">Si pones una fecha ya pasada, al guardar se crearán los gastos de esos vencimientos. Si ese mes ya tenía su gasto, se actualiza con los datos nuevos en vez de crear otro.</p>' : ''}
       <button class="btn" type="submit">${ed ? 'Guardar cambios' : 'Dar de alta'}</button>
       <button class="btn ghost" type="button" id="cancelEdit">Cancelar</button>
     </form>`;
@@ -3117,6 +3235,7 @@ function bindGastos(bills, mov){
     S.movDel = null; re();
   });
   // Pagar mi parte de una factura (tanto en la factura como en su gasto)
+  app.querySelectorAll('[data-ver-ticket]').forEach(b => b.onclick = () => abrirTicket(b.dataset.verTicket));
   app.querySelectorAll('[data-pay]').forEach(btn => btn.onclick = async () => {
     btn.disabled = true;
     try{
