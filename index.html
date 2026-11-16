@@ -302,6 +302,9 @@ input.invalid,select.invalid{border-color:var(--bad)}
 .tk-quien legend{font-weight:800;font-size:14px;margin-bottom:4px;padding:0}
 .tk-quien .chk{display:flex;align-items:center;gap:6px;font-weight:600;min-height:36px}
 .tk-quien .chk input{width:20px;height:20px}
+.tk-lineas{list-style:none;margin:6px 0 0;padding:6px 0 0 10px;border-left:2px solid var(--line);display:grid;gap:2px}
+.tk-lineas li{display:block;padding:0;border:0;min-height:0;font-size:14px;font-weight:600;color:var(--ink)}
+.tk-lineas li span{color:var(--ok);font-weight:900}
 .tk-items{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0 10px;max-height:216px;overflow:auto;border:1.5px solid var(--line);border-radius:12px;padding:6px 10px}
 .tk-items legend{float:left;width:100%;grid-column:1/-1}
 .tk-items .chk{font-size:14px;line-height:1.2;min-height:40px}
@@ -712,7 +715,7 @@ function remoteApi(sb, uid){
       const r = ok(await sb.from('apartment_balances').select('balance').eq('apartment_id', aptId).eq('user_id', uid).maybeSingle());
       return Number(r?.balance ?? 0);
     },
-    async items(aptId){ return ok(await sb.from('shopping_items').select('id,name,is_bought,created_at,bought_by,bought_at,expense_id,running_low,low_by,low_at,expense:expense_id(amount,deleted_at)').eq('apartment_id', aptId).order('is_bought').order('created_at',{ascending:false})); },
+    async items(aptId){ return ok(await sb.from('shopping_items').select('id,name,is_bought,created_at,bought_by,bought_at,expense_id,ticket_expense_id,running_low,low_by,low_at,expense:expense_id(amount,deleted_at)').eq('apartment_id', aptId).order('is_bought').order('created_at',{ascending:false})); },
     async addItem(aptId,name){ ok(await sb.from('shopping_items').insert({apartment_id:aptId,name})); },
     // TEO-19: tachar (true) o destachar (false). Quién y cuándo lo guarda un trigger de la base de datos.
     async setBought(id,v){
@@ -778,6 +781,9 @@ function remoteApi(sb, uid){
       ok(await sb.storage.from('receipts').upload(path, blob, {contentType:'image/jpeg', upsert:false}));
       return path;
     },
+    // Ticket en un solo paso: gasto con su foto + productos tachados y enlazados a ese ticket (o todo o nada)
+    async createTicket(aptId, t){ return ok(await sb.rpc('create_ticket_expense', {p_apartment_id:aptId, p_description:t.description, p_amount:t.amount,
+      p_participants:t.participants, p_receipt_path:t.receipt, p_items:t.items || []})); },
     async delReceipt(path){ await sb.storage.from('receipts').remove([path]); },
     async receiptUrl(path){ const r = ok(await sb.storage.from('receipts').createSignedUrl(path, 300)); return r.signedUrl; },
     // Saldar deudas: un pago de una persona a otra (lo anota quien paga o quien cobra)
@@ -1072,7 +1078,7 @@ function demoApi(clave){
     addItem:(a,name)=>{ db.items.push({id:id('i'),name,is_bought:false,running_low:false,created_at:new Date().toISOString()}); return wait(); },
     setBought:(i,v)=>{ const x = db.items.find(y=>y.id===i); if (!x) return Promise.reject(new Error('Ese producto ya no está en la lista.'));
       if (!v && x.is_bought){ const err = quitarGastoCompra(x); if (err) return Promise.reject(new Error(err)); x.expense_id = null; }
-      if (v && !x.is_bought){ x.bought_by = me; x.bought_at = new Date().toISOString(); } if (!v){ x.bought_by = null; x.bought_at = null; }
+      if (v && !x.is_bought){ x.bought_by = me; x.bought_at = new Date().toISOString(); } if (!v){ x.bought_by = null; x.bought_at = null; x.ticket_expense_id = null; }
       x.is_bought = v; if (v){ x.running_low = false; x.low_by = null; x.low_at = null; } return wait(); },
     setLow:(i,v)=>{ const x = db.items.find(y=>y.id===i); if (!x) return Promise.reject(new Error('Ese producto ya no está en la lista.'));
       if (x.is_bought) return Promise.reject(new Error('Ese producto ya está comprado.'));
@@ -1128,6 +1134,14 @@ function demoApi(clave){
       db.manual.push({id:id('g'), name:g.description, amount:Math.round(g.amount*100)/100, date:g.date, paid_by:g.paid_by, created_by:me, created_at:new Date().toISOString(), split:g.split || 'equal', shares, receipt:g.receipt || null});
       return wait(); },
     uploadReceipt:(a, blob)=>{ const k = 'demo/' + id('t'); (db.recibos ||= {})[k] = URL.createObjectURL(blob); return wait(k); },
+    createTicket:(a, t)=>{
+      if (!(t.amount > 0)) return Promise.reject(new Error('Falta el importe del ticket (debe ser mayor que 0)'));
+      if (!t.receipt) return Promise.reject(new Error('Falta la foto del ticket'));
+      const shares = calcularGasto({amount:t.amount, paid_by:me, split:'equal', participants:t.participants}); if (typeof shares === 'string') return Promise.reject(new Error(shares));
+      const gid = id('g'), ahora = new Date().toISOString();
+      db.manual.push({id:gid, name:t.description || 'Compra del súper', amount:Math.round(t.amount*100)/100, date:iso(new Date()), paid_by:me, created_by:me, created_at:ahora, split:'equal', shares, receipt:t.receipt});
+      for (const x of db.items.filter(y => (t.items || []).includes(y.id) && !y.is_bought)){ x.is_bought = true; x.bought_by = me; x.bought_at = ahora; x.running_low = false; x.ticket_expense_id = gid; }
+      return wait(gid); },
     delReceipt:k=>{ if (db.recibos) delete db.recibos[k]; return wait(); },
     receiptUrl:k=>db.recibos && db.recibos[k] ? wait(db.recibos[k]) : Promise.reject(new Error('Ese ticket ya no está disponible')),
     payments:()=>wait(db.payments.slice().sort((a,b) => b.paid_at.localeCompare(a.paid_at))),
@@ -2422,8 +2436,10 @@ async function abrirTicket(path){
 }
 const parseImporte = t => { const x = String(t || '').trim().replace(/\s/g, '').replace(/\.(?=\d{3}(\D|$))/g, '').replace(',', '.'); const n = Math.round(parseFloat(x) * 100) / 100; return isFinite(n) ? n : NaN; };
 function filaTicket(i){
-  return `<li data-busca="${esc(norm('ticket ' + i.name))}"><span class="mag-dot mag ${mc(i.bought_by)}" aria-hidden="true">🧾</span>
-    <span class="grow"><span class="name">${esc(i.name)}</span><br><span class="small dim">Ticket · ${i.bought_by === S.api.uid ? 'lo subiste tú' : 'lo subió ' + esc(nombreMiembro(i.bought_by))} · ${esc(dayLabel(i.bought_at))}</span></span>
+  const l = i.lineas || [];
+  return `<li class="fila-ticket" data-busca="${esc(norm(['ticket', i.name, ...l.map(x => x.name)].join(' ')))}"><span class="mag-dot mag ${mc(i.bought_by)}" aria-hidden="true">🧾</span>
+    <span class="grow"><span class="name">${esc(i.name)}</span><br><span class="small dim">Ticket · ${i.bought_by === S.api.uid ? 'lo subiste tú' : 'lo subió ' + esc(nombreMiembro(i.bought_by))} · ${esc(dayLabel(i.bought_at))}</span>
+      ${l.length ? `<ul class="tk-lineas" aria-label="Productos de este ticket">${l.map(x => `<li><span aria-hidden="true">✓</span> ${esc(x.name)}</li>`).join('')}</ul>` : ''}</span>
     <span class="right" style="text-align:right"><b>${eur(i.expense.amount)}</b><br><button type="button" class="link" data-ver-ticket="${esc(i.receipt)}">Ver ticket</button></span></li>`;
 }
 function ticketFormHtml(pend){
@@ -2491,8 +2507,10 @@ async function renderCompra(){
   const comprados0 = items.filter(i => i.is_bought);
   // TEO-20: los tickets subidos cuentan en «Ya comprado» como una fila más (con su importe y su foto)
   const tks = (await S.api.expenses(S.apt.id).catch(() => [])).filter(g => g.receipt && !ocultos.has('m:g:' + g.id))
-    .map(g => ({ticket:true, id:'t' + g.id, name:g.name, bought_by:g.paid_by, bought_at:g.created_at, expense:{amount:g.amount}, receipt:g.receipt}));
-  const comprados = [...comprados0, ...tks].sort((a,b) => String(b.bought_at||'').localeCompare(String(a.bought_at||'')));
+    .map(g => ({ticket:true, id:'t' + g.id, gid:g.id, name:g.name, bought_by:g.paid_by, bought_at:g.created_at, expense:{amount:g.amount}, receipt:g.receipt,
+      lineas:comprados0.filter(i => i.ticket_expense_id === g.id)}));
+  const enTicket = new Set(tks.flatMap(t => t.lineas.map(i => i.id)));   // los productos de un ticket se ven dentro de él, no sueltos
+  const comprados = [...comprados0.filter(i => !enTicket.has(i.id)), ...tks].sort((a,b) => String(b.bought_at||'').localeCompare(String(a.bought_at||'')));
 
   // agrupar los pendientes por día, del más reciente al más antiguo
   const dias = [];
@@ -2523,10 +2541,12 @@ async function renderCompra(){
   const filtrosHechos = enPeriodo.length ? `<div class="filtros" role="group" aria-label="Filtrar lo comprado">${[['todos','Todos',enPeriodo.length],['mios','Comprado por mí',mios.length],['otros','Por compañeros',otros.length]].map(([k,v,n]) =>
     `<button type="button" class="filtro" data-cfiltro="${k}" aria-pressed="${cf === k}">${v} <span>${n}</span></button>`).join('')}</div>` : '';
   const vacioHecho = txt => `<p class="empty">${txt}</p>`;
+  const nProd = l => l.reduce((x, i) => x + (i.ticket ? (i.lineas.length || 1) : 1), 0);   // un ticket cuenta sus productos
+  const prodTxt = l => { const k = nProd(l); return `${k} ${k === 1 ? 'producto' : 'productos'}`; };
   const resumenHechos = enPeriodo.length ? `<div class="resumen" aria-label="Lo gastado en compra">
-      <div class="mio"><b>Tú</b><span class="v">${eur(suma(mios))}</span><small>${mios.length} ${mios.length === 1 ? 'producto' : 'productos'}</small></div>
-      <div><b>Compañeros</b><span class="v">${eur(suma(otros))}</span><small>${otros.length} ${otros.length === 1 ? 'producto' : 'productos'}</small></div>
-      <div class="full"><b>Total ${per === 'todo' ? 'desde el principio' : 'en ' + esc(nomMes(per))}</b><span class="v">${eur(suma(enPeriodo))}</span><small>${enPeriodo.length} ${enPeriodo.length === 1 ? 'producto' : 'productos'}</small></div></div>
+      <div class="mio"><b>Tú</b><span class="v">${eur(suma(mios))}</span><small>${prodTxt(mios)}</small></div>
+      <div><b>Compañeros</b><span class="v">${eur(suma(otros))}</span><small>${prodTxt(otros)}</small></div>
+      <div class="full"><b>Total ${per === 'todo' ? 'desde el principio' : 'en ' + esc(nomMes(per))}</b><span class="v">${eur(suma(enPeriodo))}</span><small>${prodTxt(enPeriodo)}</small></div></div>
     ${sinPrecio(enPeriodo) ? `<p class="small dim" style="margin:2px 2px 0">Los totales solo suman lo que tiene el precio anotado (${sinPrecio(enPeriodo)} sin precio).</p>` : ''}` : '';
 
   app.innerHTML = `${header('Compra común')}${subtabsHtml('compra', {pend:pend.length, hechos:comprados.length})}
@@ -2630,12 +2650,11 @@ async function renderCompra(){
       try{
         path = await S.api.uploadReceipt(S.apt.id, foto);
         const desc = $('#tkDesc').value.trim() || 'Compra del súper';
-        await S.api.addExpense(S.apt.id, {description:desc, amount, paid_by:S.api.uid, split:'equal', participants:parts, date:iso(new Date()), receipt:path});
+        await S.api.createTicket(S.apt.id, {description:desc, amount, participants:parts, receipt:path, items:tachar});   // gasto + productos, todo junto
       }catch(err){
         if (path) S.api.delReceipt(path).catch(() => {});   // si el gasto no se crea, no se queda la foto suelta
         btn.disabled = false; btn.textContent = 'Guardar ticket'; toast(friendly(err)); return;
       }
-      for (const idt of tachar){ try{ await S.api.setBought(idt, true); }catch{} }
       S.ticket = null;
       toast(`Ticket guardado: ${eur(amount)} entre ${parts.length}. Lo verás en Gastos.`);
       await renderCompra();
