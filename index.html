@@ -387,6 +387,11 @@ li.low .lowbtn{color:var(--alert-ink)}
 .despensa:not([open]){padding-bottom:0}
 .despensa p{margin:0 0 8px}
 .despensa .chips{display:flex;flex-wrap:wrap;gap:8px}
+.low-form{padding:10px 12px 12px}
+.low-form label{display:block;font-weight:800;font-size:15px;margin-bottom:6px}
+.low-form .row{display:flex;gap:8px}
+.low-form input{flex:1 1 auto;min-width:0}
+.low-form small{display:block;margin-top:6px}
 .despchip{min-height:40px;padding:0 14px;border-radius:99px;border:1.5px solid var(--line);background:var(--paper);color:var(--ink);font-size:15px;font-weight:700;max-width:100%;overflow-wrap:anywhere}
 .despchip:hover{border-color:var(--alert-ink)}
 .empty{padding:18px 0;color:var(--muted);font-size:15px;display:block!important;min-height:0!important;text-align:center}
@@ -865,16 +870,36 @@ function remoteApi(sb, uid){
     },
     // De la compra al gasto: anota lo que costó un producto y lo reparte entre todos
     async buyItemWithExpense(itemId, amount){ return ok(await sb.rpc('buy_item_with_expense', {p_item_id:itemId, p_amount:amount})); },
+    // Igual, pero eligiendo quién participa (sin pasar por Gastos). Crea el gasto repartido
+    // y lo enlaza al producto; si el enlace falla, borra el gasto para no dejarlo suelto.
+    async buyItemConPartes(aptId, item, amount, participants){
+      const orden = participants.includes(uid) ? [uid, ...participants.filter(u => u !== uid)] : participants;   // los céntimos sobrantes, para quien paga
+      const gid = ok(await sb.rpc('create_expense', {p_apartment_id:aptId, p_description:'Compra: ' + item.name, p_amount:amount, p_paid_by:uid,
+        p_split_type:'equal', p_participants:orden, p_values:null, p_expense_date:iso(new Date()), p_receipt_path:null, p_category:'compra'}));
+      try{
+        const rows = ok(await sb.from('shopping_items').update({is_bought:true, expense_id:gid}).eq('id', item.id).select('id'));
+        if (!rows || !rows.length) throw new Error('No se ha podido enlazar el gasto con el producto.');
+      }catch(err){
+        try{ ok(await sb.rpc('delete_expense', {p_expense_id:gid})); }catch{}
+        throw err;
+      }
+      return gid;
+    },
     async delExpense(expenseId){ ok(await sb.rpc('delete_expense', {p_expense_id:expenseId})); },
     // Editar un gasto: la base de datos recalcula el reparto con las mismas reglas que al crearlo
     async updateExpense(expenseId, g){ ok(await sb.rpc('update_expense', {p_expense_id:expenseId, p_description:g.description, p_amount:g.amount, p_paid_by:g.paid_by,
       p_split_type:g.split || 'equal', p_participants:g.participants, p_values:g.values || null, p_expense_date:g.date, p_category:g.category || null})); },
-    // Tablón de avisos: los vencidos no llegan (los filtra la base de datos); solo el autor elimina
+    // Tablón de avisos: los vencidos no llegan (los filtra la base de datos). Cualquier
+    // compañero del piso puede editarlos y eliminarlos; el autor no cambia al editar.
     async notices(aptId){ return ok(await sb.rpc('list_bulletin_notices', {p_apartment_id:aptId})) || []; },
     async addNotice(aptId, n){ ok(await sb.from('bulletin_notices').insert({apartment_id:aptId, title:n.title, content:n.content, expires_at:n.expires_at})); },
+    async updateNotice(noticeId, n){
+      const rows = ok(await sb.from('bulletin_notices').update({title:n.title, content:n.content, expires_at:n.expires_at}).eq('id', noticeId).select('id'));
+      if (!rows || !rows.length) throw new Error('No se ha podido guardar: puede que el aviso ya haya vencido o que alguien lo haya eliminado.');
+    },
     async delNotice(noticeId){
       const rows = ok(await sb.from('bulletin_notices').delete().eq('id', noticeId).select('id'));
-      if (!rows || !rows.length) throw new Error('No se ha podido eliminar: puede que el aviso ya haya vencido o que no seas su autor.');
+      if (!rows || !rows.length) throw new Error('No se ha podido eliminar: puede que el aviso ya haya vencido o que alguien lo haya eliminado antes.');
     },
     // Normas del piso: mismos permisos para todos; autor, fechas y registro los pone la base de datos
     async rules(aptId){ return ok(await sb.rpc('list_house_rules', {p_apartment_id:aptId})) || []; },
@@ -1281,6 +1306,17 @@ function demoApi(clave){
       db.manual.push(g);
       if (!it.is_bought){ it.is_bought = true; it.running_low = false; it.low_by = null; it.low_at = null; it.bought_by = me; it.bought_at = new Date().toISOString(); }
       it.expense_id = g.id; return wait(g.id); },
+    buyItemConPartes:(a, item, amount, parts)=>{ const it = db.items.find(x => x.id === item.id);
+      if (!it) return Promise.reject(new Error('Ese producto no existe o no es de tu piso'));
+      if (it.expense_id && db.manual.some(g => g.id === it.expense_id)) return Promise.reject(new Error('Ese producto ya tiene su gasto anotado'));
+      if (it.is_bought && it.bought_by && it.bought_by !== me) return Promise.reject(new Error('Solo quien lo compró puede anotar lo que costó'));
+      if (!(amount > 0)) return Promise.reject(new Error('El importe debe ser mayor que 0'));
+      if (!parts || !parts.length) return Promise.reject(new Error('Tiene que haber al menos un participante'));
+      const orden = parts.includes(me) ? [me, ...parts.filter(u => u !== me)] : parts;
+      const g = {id:id('g'), name:'Compra: ' + it.name, amount:Math.round(amount*100)/100, date:iso(new Date()), paid_by:me, created_by:me, created_at:new Date().toISOString(), shares:repartir(amount, orden), category:'compra'};
+      db.manual.push(g);
+      if (!it.is_bought){ it.is_bought = true; it.running_low = false; it.low_by = null; it.low_at = null; it.bought_by = me; it.bought_at = new Date().toISOString(); }
+      it.expense_id = g.id; return wait(g.id); },
     delExpense:(gid)=>{ const lista = db.manual.some(g => g.id === gid) ? db.manual : db.gastos, k = lista.findIndex(g => g.id === gid);
       if (k < 0) return Promise.reject(new Error('Ese gasto no existe o no es de tu piso'));
       if (lista[k].created_by !== me && lista[k].paid_by !== me) return Promise.reject(new Error('Solo quien anotó el gasto o quien lo pagó puede eliminarlo'));
@@ -1296,8 +1332,12 @@ function demoApi(clave){
         .map(n => ({...n, author_name: db.members.find(m => m.id === n.user_id)?.name || null}))); },
     addNotice:(a, n)=>{ if (n.expires_at && new Date(n.expires_at) <= Date.now()) return Promise.reject(new Error('EXPIRY_IN_PAST'));
       db.notices.push({id:id('a'), title:n.title, content:n.content, user_id:me, created_at:new Date().toISOString(), expires_at:n.expires_at}); return wait(); },
-    delNotice:(nid)=>{ const k = db.notices.findIndex(x => x.id === nid && x.user_id === me && (!x.expires_at || new Date(x.expires_at) > Date.now()));
-      if (k < 0) return Promise.reject(new Error('No se ha podido eliminar: puede que el aviso ya haya vencido o que no seas su autor.'));
+    updateNotice:(nid, n)=>{ if (n.expires_at && new Date(n.expires_at) <= Date.now()) return Promise.reject(new Error('EXPIRY_IN_PAST'));
+      const x = db.notices.find(y => y.id === nid && (!y.expires_at || new Date(y.expires_at) > Date.now()));
+      if (!x) return Promise.reject(new Error('No se ha podido guardar: puede que el aviso ya haya vencido o que alguien lo haya eliminado.'));
+      x.title = n.title; x.content = n.content; x.expires_at = n.expires_at; return wait(); },   // el autor y la fecha de publicación no cambian
+    delNotice:(nid)=>{ const k = db.notices.findIndex(x => x.id === nid && (!x.expires_at || new Date(x.expires_at) > Date.now()));
+      if (k < 0) return Promise.reject(new Error('No se ha podido eliminar: puede que el aviso ya haya vencido o que alguien lo haya eliminado antes.'));
       db.notices.splice(k,1); return wait(); },
     rules:()=>wait(db.rules.map(r => ({...r, created_by_name:nombreDe(r.created_by), updated_by_name:nombreDe(r.updated_by)}))),
     rulesLog:()=>wait(db.rulesLog.slice(0,30).map(l => ({...l}))),
@@ -1622,7 +1662,7 @@ app.addEventListener('click', async e => {
   if (e.target.closest('[data-logout]')){ await S.sb.auth.signOut(); S.tab = 'facturas'; await boot(false); return; }
   const g = e.target.closest('[data-go]'); if (!g) return;
   if (g.dataset.subgo){ S.sub = S.sub || {}; S.sub[g.dataset.go] = g.dataset.subgo; }
-  S.tab = g.dataset.go; S.editItem = null; S.editBill = null; S.normaForm = null; S.normaDel = null; S.avisoForm = false; S.avisoDel = null; S.gastoForm = false; S.gastoEdit = null; S.gastoTipo = null; S.gastoDel = null; S.echar = null; S.admin = null; S.saldar = null; S.movDel = null; S.billForm = false; S.precioItem = null; S.compraPrecio = null; S.histTodo = false; render(); window.scrollTo(0,0);
+  S.tab = g.dataset.go; S.editItem = null; S.editBill = null; S.normaForm = null; S.normaDel = null; S.avisoForm = false; S.avisoEdit = null; S.avisoDel = null; S.gastoForm = false; S.gastoEdit = null; S.gastoTipo = null; S.gastoDel = null; S.echar = null; S.admin = null; S.saldar = null; S.movDel = null; S.billForm = false; S.precioItem = null; S.compraPrecio = null; S.histTodo = false; render(); window.scrollTo(0,0);
 });
 /* Animaciones: onda al pulsar y entrada al cambiar de pestaña */
 document.addEventListener('pointerdown', e => {
@@ -1661,7 +1701,7 @@ let ultimaCarga = Date.now();
 // No se recarga la pantalla si estás escribiendo, con un formulario abierto o confirmando algo
 function estaOcupado(){
   return !!(S.gastoForm || S.billForm || S.editBill || S.editItem || S.normaForm || S.avisoForm || S.echar || S.saldar ||
-    S.movDel || S.gastoEdit || S.billDel || S.normaDel || S.avisoDel || S.precioItem || S.compraPrecio || S.ticket || S.cambio || S.ausForm || S.fijosGest ||
+    S.movDel || S.gastoEdit || S.billDel || S.normaDel || S.avisoDel || S.avisoEdit || S.precioItem || S.compraPrecio || S.ticket || S.cambio || S.ausForm || S.fijosGest ||
     (document.activeElement && document.activeElement.matches && document.activeElement.matches('input,textarea,select')));
 }
 /* ---------- Cambios en directo (Supabase Realtime) ----------
@@ -1709,7 +1749,7 @@ window.addEventListener('pageshow', e => { if (e.persisted){ ultimaCarga = 0; re
 function renderNav(){
   $('#navIn').innerHTML = TABS.map(([k,l]) => `<button data-tab="${k}" ${S.tab===k?'aria-current="page"':''}>${k === 'facturas' ? `<span class="eur" aria-hidden="true">€</span>${l}` : l}</button>`).join('');
   document.body.dataset.tab = S.tab;
-  $('#navIn').querySelectorAll('button').forEach(b => b.onclick = () => { S.tab = b.dataset.tab; S.editItem = null; S.editBill = null; S.normaForm = null; S.normaDel = null; S.avisoForm = false; S.avisoDel = null; S.gastoForm = false; S.gastoEdit = null; S.gastoTipo = null; S.gastoDel = null; S.echar = null; S.admin = null; S.saldar = null; S.movDel = null; S.billForm = false; S.precioItem = null; S.compraPrecio = null; S.histTodo = false; render(); window.scrollTo(0,0); });
+  $('#navIn').querySelectorAll('button').forEach(b => b.onclick = () => { S.tab = b.dataset.tab; S.editItem = null; S.editBill = null; S.normaForm = null; S.normaDel = null; S.avisoForm = false; S.avisoEdit = null; S.avisoDel = null; S.gastoForm = false; S.gastoEdit = null; S.gastoTipo = null; S.gastoDel = null; S.echar = null; S.admin = null; S.saldar = null; S.movDel = null; S.billForm = false; S.precioItem = null; S.compraPrecio = null; S.histTodo = false; render(); window.scrollTo(0,0); });
 }
 async function render(){
   // El directo es un extra: si el navegador bloquea la conexión (Firefox lanza el error al momento), la app sigue funcionando.
@@ -2163,15 +2203,22 @@ function cuandoNorma(t){
   const d = new Date(t); if (isNaN(d)) return '';
   return d.toLocaleDateString('es-ES',{day:'numeric',month:'short',year:'numeric'}) + ', ' + d.toLocaleTimeString('es-ES',{hour:'2-digit',minute:'2-digit'});
 }
-/* Tablón de avisos: cualquiera del piso publica, solo el autor elimina, y los avisos
-   con fecha de finalización desaparecen solos a esa hora (lo filtra la base de datos). */
+/* Tablón de avisos: cualquiera del piso publica, edita y elimina (como las normas), y los
+   avisos con fecha de finalización desaparecen solos a esa hora (lo filtra la base de datos).
+   Al editar, el autor y la fecha de publicación no cambian: los mantiene la base de datos. */
 function localNow(minutos = 0){
   const d = new Date(Date.now() + minutos*6e4); d.setSeconds(0,0);
   return new Date(d - d.getTimezoneOffset()*6e4).toISOString().slice(0,16);
 }
+// Una fecha guardada, en el formato que entiende <input type="datetime-local">
+function localValor(ts){
+  const d = new Date(ts); if (isNaN(d)) return '';
+  d.setSeconds(0,0);
+  return new Date(d - d.getTimezoneOffset()*6e4).toISOString().slice(0,16);
+}
 /* Subpestañas dentro de cada sección, para no tener que bajar tanto */
 const SUBS = {
-  piso:     [['inicio','Inicio','#app .turno, #app .invitar, #app .parati'], ['comp','Compañeros','#comp'], ['ajustes','Ajustes','#ajustes']],
+  piso:     [['inicio','Inicio','#app .turno, #app .parati, #ajustes'], ['comp','Compañeros','#comp, #app .invitar']],
   compra:   [['pend','Por comprar','[data-g="pend"]'], ['hechos','Ya comprado','[data-g="hechos"]']],
   limpieza: [['semana','Esta semana','#semana'], ['zonas','Zonas','#zonas'], ['hist','Histórico','#hist']],
   facturas: [['saldos','Saldos','#saldos'], ['mes','Mes','#mes'], ['movs','Movimientos','#movs'], ['facts','Facturas','#facts']]
@@ -2204,7 +2251,7 @@ async function renderTablonTab(){
     </div>
     <section class="sec" id="${sub}" aria-live="polite"><h2>${sub === 'avisos' ? 'Avisos' : 'Normas del piso'}</h2><p class="sub">Cargando…</p></section>`;
   app.querySelectorAll('[data-sub]').forEach(b => b.onclick = () => {
-    S.tablonSub = b.dataset.sub; S.avisoForm = false; S.avisoDel = null; S.normaForm = null; S.normaDel = null; renderTablonTab();
+    S.tablonSub = b.dataset.sub; S.avisoForm = false; S.avisoEdit = null; S.avisoDel = null; S.normaForm = null; S.normaDel = null; renderTablonTab();
   });
   if (sub === 'avisos') await renderAvisos(); else await renderNormas();
 }
@@ -2222,44 +2269,50 @@ async function renderAvisos(){
   const conFecha = list.filter(n => n.expires_at).map(n => new Date(n.expires_at) - ahora).filter(ms => ms > 0);
   if (conFecha.length){
     const espera = Math.min(Math.min(...conFecha) + 1000, 864e5);
-    S.avisoTimer = setTimeout(() => { if (S.tab === 'tablon' && document.getElementById('avisos') && S.apt === apt && !S.avisoForm && !S.avisoDel) renderAvisos(); }, espera);
+    S.avisoTimer = setTimeout(() => { if (S.tab === 'tablon' && document.getElementById('avisos') && S.apt === apt && !S.avisoForm && !S.avisoDel && !S.avisoEdit) renderAvisos(); }, espera);
   }
   const yo = S.api.uid;
-  const form = S.avisoForm ? `
+  const ed = S.avisoEdit ? list.find(n => n.id === S.avisoEdit) : null;
+  if (S.avisoEdit && !ed) S.avisoEdit = null;   // se lo han cargado o ha vencido mientras lo editabas
+  const form = (S.avisoForm || ed) ? `
     <form id="fAviso" novalidate style="display:grid;gap:12px;margin-top:12px">
-      <h3 class="wk" style="margin:0">Nuevo aviso</h3>
-      <label>Título<input id="aTitle" maxlength="100" placeholder="Semana de exámenes del 9 al 13">
+      <h3 class="wk" style="margin:0">${ed ? 'Editar aviso' : 'Nuevo aviso'}</h3>
+      ${ed ? `<p class="small dim" style="margin:-6px 0 0">Lo publicó ${esc(ed.user_id === yo ? 'ti' : (ed.author_name || 'un antiguo compañero'))} y así se queda: editarlo no cambia el autor.</p>` : ''}
+      <label>Título<input id="aTitle" maxlength="100" placeholder="Semana de exámenes del 9 al 13" value="${ed ? esc(ed.title) : ''}">
         <small class="err" id="eTitle" role="alert" hidden></small></label>
-      <label>Contenido<textarea id="aBody" maxlength="1000" placeholder="Explica el aviso con claridad"></textarea>
-        <span class="counter" id="aCount">0 / 1000</span><small class="err" id="eBody" role="alert" hidden></small></label>
-      <label>Visible hasta (opcional)<input id="aExp" type="datetime-local" min="${localNow(1)}">
+      <label>Contenido<textarea id="aBody" maxlength="1000" placeholder="Explica el aviso con claridad">${ed ? esc(ed.content) : ''}</textarea>
+        <span class="counter" id="aCount">${ed ? ed.content.length : 0} / 1000</span><small class="err" id="eBody" role="alert" hidden></small></label>
+      <label>Visible hasta (opcional)<input id="aExp" type="datetime-local" min="${localNow(1)}" value="${ed && ed.expires_at ? esc(localValor(ed.expires_at)) : ''}">
         <small class="small dim">Si lo dejas vacío, se verá hasta que lo elimines.</small>
         <small class="err" id="eExp" role="alert" hidden></small></label>
       <div style="display:flex;gap:10px;flex-wrap:wrap">
-        <button class="btn" type="submit">Publicar aviso</button>
+        <button class="btn" type="submit">${ed ? 'Guardar cambios' : 'Publicar aviso'}</button>
         <button class="btn ghost" type="button" id="aCancel">Cancelar</button>
       </div>
     </form>` : `<button class="btn" id="aAdd" style="margin-top:12px">Publicar aviso</button>`;
   host.innerHTML = `
     <div class="sec-head"><h2>Avisos vigentes</h2><span class="count">${list.length}</span></div>
-    <p class="sub">Lo que tienen que saber todos los del piso. Si le pones fecha de finalización, desaparece solo a esa hora.</p>
+    <p class="sub">Lo que tienen que saber todos los del piso. Si le pones fecha de finalización, desaparece solo a esa hora. Cualquiera del piso puede editar un aviso (para cambiar una hora, por ejemplo) o eliminarlo.</p>
     ${form}
     ${list.length ? `<ul class="list" style="margin-top:14px">${list.map(n => `
       <li class="aviso"><span class="name">${esc(n.title)}</span>
         <p class="desc" style="margin:4px 0 0;white-space:pre-wrap;overflow-wrap:anywhere">${esc(n.content)}</p>
         <span class="small dim">Publicado por ${esc(n.user_id === yo ? 'ti' : (n.author_name || 'un antiguo compañero'))} · ${esc(cuandoNorma(n.created_at))}</span><br>
         <span class="hasta">${n.expires_at ? 'Visible hasta el ' + esc(cuandoNorma(n.expires_at)) : 'Sin fecha de finalización'}</span>
-        ${n.user_id !== yo ? '' : S.avisoDel === n.id ? `<div class="confirm" role="alertdialog" aria-label="Confirmar eliminación">
+        ${S.avisoEdit === n.id ? '' : S.avisoDel === n.id ? `<div class="confirm" role="alertdialog" aria-label="Confirmar eliminación">
             <span>¿Seguro que quieres eliminar el aviso «${esc(n.title)}»? Desaparecerá para todos.</span>
             <span class="row"><button class="btn small danger" data-adel-ok="${esc(n.id)}">Sí, eliminar</button><button class="btn small ghost" data-adel-no>Cancelar</button></span></div>`
-          : `<span class="acts"><button type="button" class="link" data-adel="${esc(n.id)}" aria-label="Eliminar el aviso ${esc(n.title)}">Eliminar</button></span>`}
+          : `<span class="acts"><button type="button" class="link" data-aedit="${esc(n.id)}" aria-label="Editar el aviso ${esc(n.title)}">Editar</button>
+            <button type="button" class="link" data-adel="${esc(n.id)}" aria-label="Eliminar el aviso ${esc(n.title)}">Eliminar</button></span>`}
       </li>`).join('')}</ul>`
       : '<p class="empty" style="margin-top:14px">No hay avisos vigentes en este piso.</p>'}
     <div style="display:flex;justify-content:flex-end;margin-top:12px"><button class="link" id="aRefresh">Actualizar</button></div>`;
 
   $('#aRefresh').onclick = async () => { await renderAvisos(); toast('Avisos actualizados.'); };
-  const add = $('#aAdd'); if (add) add.onclick = () => { S.avisoForm = true; S.avisoDel = null; renderAvisos().then(() => $('#aTitle')?.focus()); };
-  host.querySelectorAll('[data-adel]').forEach(b => b.onclick = () => { S.avisoDel = b.dataset.adel; renderAvisos(); });
+  const add = $('#aAdd'); if (add) add.onclick = () => { S.avisoForm = true; S.avisoEdit = null; S.avisoDel = null; renderAvisos().then(() => $('#aTitle')?.focus()); };
+  host.querySelectorAll('[data-aedit]').forEach(b => b.onclick = () => { S.avisoEdit = b.dataset.aedit; S.avisoForm = false; S.avisoDel = null;
+    renderAvisos().then(() => { $('#fAviso')?.scrollIntoView({block:'start'}); $('#aTitle')?.focus({preventScroll:true}); }); });
+  host.querySelectorAll('[data-adel]').forEach(b => b.onclick = () => { S.avisoDel = b.dataset.adel; S.avisoEdit = null; renderAvisos(); });
   host.querySelectorAll('[data-adel-no]').forEach(b => b.onclick = () => { S.avisoDel = null; renderAvisos(); });
   host.querySelectorAll('[data-adel-ok]').forEach(b => b.onclick = async () => {
     b.disabled = true;
@@ -2270,7 +2323,7 @@ async function renderAvisos(){
   $('#aBody').addEventListener('input', () => { $('#aCount').textContent = `${$('#aBody').value.length} / 1000`; clearFieldError('aBody'); });
   $('#aTitle').addEventListener('input', () => clearFieldError('aTitle'));
   $('#aExp').addEventListener('input', () => clearFieldError('aExp'));
-  $('#aCancel').onclick = () => { S.avisoForm = false; renderAvisos(); };
+  $('#aCancel').onclick = () => { S.avisoForm = false; S.avisoEdit = null; renderAvisos(); };
   const fail = (idc, msg) => { const er = document.getElementById('e' + idc.slice(1)); er.textContent = msg; er.hidden = false; const el = document.getElementById(idc); el.setAttribute('aria-invalid','true'); return el; };
   f.onsubmit = async e => {
     e.preventDefault();
@@ -2288,8 +2341,8 @@ async function renderAvisos(){
     if (first){ first.focus(); return; }
     const btn = f.querySelector('button[type=submit]'); btn.disabled = true;
     try{
-      await S.api.addNotice(apt.id, {title, content, expires_at});
-      S.avisoForm = false; toast('Aviso publicado. Lo verán todos los compañeros del piso.');
+      if (ed){ await S.api.updateNotice(ed.id, {title, content, expires_at}); S.avisoEdit = null; toast('Aviso actualizado. Lo verán todos con el cambio.'); }
+      else { await S.api.addNotice(apt.id, {title, content, expires_at}); S.avisoForm = false; toast('Aviso publicado. Lo verán todos los compañeros del piso.'); }
       await renderAvisos();
     }catch(err){
       btn.disabled = false;   // el formulario conserva lo escrito
@@ -2461,7 +2514,8 @@ async function renderPiso(){
   try{ asg = await S.api.assignments(apt.id, iso(curMonday())); }catch{ asg = null; }
   if (S.tab !== 'piso' || S.apt !== apt) return;
   const tiles = apt.invite_code.split('').map((c,i) => `<span class="tile mag m${(i%6)+1}">${esc(c)}</span>`).join('');
-  app.innerHTML = `${header(apt.name)}${subtabsHtml('piso', {comp:S.members.length})}${paraTi}${turnoHtml(asg)}
+  // El código y el QR viven en Compañeros: es donde se busca a quién falta por meter en el piso
+  const invitarSec = `
     <section class="sec invitar">
       <details id="invDet" ${S.showInvite || S.members.length < 2 ? 'open' : ''}>
       <summary class="btn ghost">Invitar a alguien</summary>
@@ -2479,7 +2533,8 @@ async function renderPiso(){
         <button class="link" id="copyUrl">Copiar enlace</button>
       </div>
       </details>
-    </section>
+    </section>`;
+  app.innerHTML = `${header(apt.name)}${subtabsHtml('piso', {comp:S.members.length})}${paraTi}${turnoHtml(asg)}
     <section class="sec" id="comp">
       <div class="sec-head"><h2>Compañeros</h2><span class="count">${S.members.length}</span></div>
       <ul class="list">${S.members.map(m => {
@@ -2511,6 +2566,7 @@ async function renderPiso(){
       ${S.members.length > 1 ? `<p class="small dim" style="margin:8px 2px 0">${esAdmin() ? 'Eres admin: puedes echar a un compañero (nunca a otro admin) y nombrar a otros admins con «Hacer admin».' : 'Solo un admin puede echar a alguien del piso o nombrar a otros admins.'}</p>` : ''}
       ${ausenciasHtml()}
     </section>
+    ${invitarSec}
     ${ajustesPisoHtml(apt)}`;
   bindAjustesPiso(apt);
   bindAusencias(renderPiso);
@@ -2595,20 +2651,39 @@ function despensaNombres(items){
   }
   return res.sort((x, y) => x.localeCompare(y, 'es', {sensitivity:'base'}));
 }
+// Avisar de que algo se acaba: se escribe el producto (o se elige de la lista desplegable,
+// que son los que ya se han comprado antes). Antes era una fila de botones que ocupaba
+// media pantalla y solo ofrecía lo ya comprado.
 function despensaHtml(items){
   const n = despensaNombres(items);
-  if (!n.length) return '';
-  return `<details class="despensa"${S.despAbierta ? ' open' : ''}><summary>⚠ ¿Se os acaba algo? <span class="small dim">Avisa con un toque · ${n.length}</span></summary>
-    <p class="small dim">Toca un producto: sube arriba de la lista como prioritario hasta que se compre.</p>
-    <div class="chips">${n.map(x => `<button type="button" class="despchip" data-lowname="${esc(x)}">${esc(x)}</button>`).join('')}</div></details>`;
+  return `<form class="despensa low-form" id="fLow" novalidate>
+    <label for="lowName">⚠ ¿Se os acaba algo?</label>
+    <div class="row">
+      <input id="lowName" list="lowList" maxlength="80" autocomplete="off" placeholder="Papel, detergente, aceite…" aria-describedby="lowAyuda">
+      <button class="btn" type="submit">Avisar</button>
+    </div>
+    ${n.length ? `<datalist id="lowList">${n.map(x => `<option value="${esc(x)}"></option>`).join('')}</datalist>` : ''}
+    <small class="dim" id="lowAyuda">Escríbelo o elígelo de la lista${n.length ? ` (${n.length} ${n.length === 1 ? 'producto ya comprado' : 'productos ya comprados'} antes)` : ''}. Sube arriba como prioritario hasta que alguien lo compre.</small>
+    <small class="err" id="eLow" role="alert" hidden></small>
+  </form>`;
 }
-// De la compra al gasto: quien lo compró puede anotar lo que costó y se reparte entre todos
+// Al anotar lo que costó un producto se elige aquí mismo entre quiénes se reparte,
+// sin tener que ir a Gastos. Por defecto: tú y todos los que no estén fuera hoy.
+function partesCompraHtml(){
+  return `<fieldset class="tk-quien" style="flex-basis:100%;margin-top:4px"><legend>Se reparte a partes iguales entre</legend>
+    ${S.members.map(m => { const fuera = m.id !== S.api.uid && fueraHoy(m.id);
+      return `<label class="chk"><input type="checkbox" name="cP" value="${esc(m.id)}" ${fuera ? '' : 'checked'}> ${esc(m.id === S.api.uid ? 'Tú' : m.name)}${fuera ? ' <span class="small dim">(fuera)</span>' : ''}</label>`; }).join('')}
+  </fieldset>`;
+}
+const partesElegidas = f => [...f.querySelectorAll('input[name=cP]:checked')].map(x => x.value);
+// De la compra al gasto: quien lo compró puede anotar lo que costó y se reparte entre quien elija
 function precioCompra(i){
   if (i.expense && !i.expense.deleted_at) return `<br><span class="small" style="font-weight:800">Gasto anotado: ${eur(i.expense.amount)}, repartido entre todos</span>`;
   if (i.bought_by !== S.api.uid) return '';
   if (S.precioItem === i.id) return `<form class="precio" data-precio="${esc(i.id)}" novalidate>
       <input id="precioIn" type="number" inputmode="decimal" min="0.01" step="0.01" placeholder="€" aria-label="Lo que costó ${esc(i.name)}">
       <button class="btn small" type="submit">Anotar</button><button class="btn ghost small" type="button" data-precio-no>Cancelar</button>
+      ${partesCompraHtml()}
       <small class="err" id="ePrecio" role="alert" hidden style="flex-basis:100%"></small></form>`;
   return `<br><button type="button" class="link" data-precio-abrir="${esc(i.id)}" style="min-height:36px">¿Cuánto costó? Anótalo como gasto</button>`;
 }
@@ -2684,7 +2759,8 @@ function filaCompra(i){
       <form class="precio" data-compra="${esc(i.id)}" novalidate>
         <input id="compraIn" type="number" inputmode="decimal" min="0.01" step="0.01" placeholder="Precio €" aria-label="Lo que costó ${esc(i.name)}">
         <button class="btn small" type="submit">Comprado</button><button class="btn ghost small" type="button" data-compra-no>Cancelar</button>
-        <small class="dim" style="flex-basis:100%">Si pones el precio se anota como gasto entre todos. Si lo dejas vacío, solo se tacha.</small>
+        <small class="dim" style="flex-basis:100%">Si pones el precio se anota como gasto repartido entre quien marques. Si lo dejas vacío, solo se tacha.</small>
+        ${partesCompraHtml()}
         <small class="err" id="eCompra" role="alert" hidden style="flex-basis:100%"></small></form></li>`;
   const esFijo = !i.is_bought && S.fijosSet && S.fijosSet.has(norm(i.name).trim());
   if (esFijo && !i.running_low) i = {...i, _fijo:true};
@@ -2731,7 +2807,7 @@ async function renderCompra(){
   const bajos = pend.filter(i => i.running_low).sort((a,b) => String(b.low_at||'').localeCompare(String(a.low_at||'')));
   const comprados0 = items.filter(i => i.is_bought);
   // TEO-20: los tickets subidos cuentan en «Ya comprado» como una fila más (con su importe y su foto)
-  const tks = (await S.api.expenses(S.apt.id).catch(() => [])).filter(g => g.receipt && !ocultos.has('m:g:' + g.id))
+  const tks = (await S.api.expenses(S.apt.id).catch(() => [])).filter(g => g.receipt && categoriaDe(g) === 'compra' && !ocultos.has('m:g:' + g.id))
     .map(g => ({ticket:true, id:'t' + g.id, gid:g.id, name:g.name, bought_by:g.paid_by, bought_at:g.created_at, expense:{amount:g.amount}, receipt:g.receipt,
       lineas:comprados0.filter(i => i.ticket_expense_id === g.id)}));
   const enTicket = new Set(tks.flatMap(t => t.lineas.map(i => i.id)));   // los productos de un ticket se ven dentro de él, no sueltos
@@ -2838,11 +2914,19 @@ async function renderCompra(){
       toast(v ? `«${it?.name || 'Producto'}» se está acabando: sube arriba como prioritario.` : `«${it?.name || 'Producto'}» ya no se marca como que se acaba.`); }catch(err){ toast(friendly(err)); }
     S.editItem = null; await renderCompra();
   });
-  app.querySelectorAll('[data-lowname]').forEach(b => b.onclick = async () => {
-    if (b.disabled) return; b.disabled = true;
-    try{ await S.api.reportLow(S.apt.id, b.dataset.lowname); toast(`«${b.dataset.lowname}» se está acabando: sube arriba como prioritario.`); }catch(err){ toast(friendly(err)); }
-    await renderCompra();
-  });
+  const fl = $('#fLow');
+  if (fl){
+    $('#lowName').addEventListener('input', () => { $('#eLow').hidden = true; });
+    fl.onsubmit = async e => {
+      e.preventDefault();
+      const nombre = $('#lowName').value.trim();
+      if (!nombre){ const er = $('#eLow'); er.textContent = 'Escribe qué se está acabando.'; er.hidden = false; $('#lowName').focus(); return; }
+      const btn = fl.querySelector('button[type=submit]'); btn.disabled = true;
+      try{ await S.api.reportLow(S.apt.id, nombre); toast(`«${nombre}» se está acabando: sube arriba como prioritario.`); }
+      catch(err){ btn.disabled = false; toast(friendly(err)); return; }
+      await renderCompra();
+    };
+  }
   app.querySelectorAll('[data-d]').forEach(b => b.onclick = () => {
     const idd = b.dataset.d, x = items.find(y => y.id === idd), it = conGasto(idd);
     conDeshacer('i:' + idd, `«${x?.name || 'Producto'}» quitado${it ? ` y su gasto de ${eur(it.expense.amount)}` : ''}.`, () => S.api.delItem(idd), () => { if (S.tab === 'compra') renderCompra(); });
@@ -2927,8 +3011,11 @@ async function renderCompra(){
       }
       const amount = Math.round(parseFloat(txt) * 100) / 100;
       if (!(amount > 0)){ const er = $('#eCompra'); er.textContent = 'Indica lo que costó (más de 0 €) o déjalo vacío.'; er.hidden = false; entrada.focus(); return; }
+      const parts = partesElegidas(fc);
+      if (!it){ toast('Ese producto ya no está en la lista.'); await renderCompra(); return; }
+      if (!parts.length){ const er = $('#eCompra'); er.textContent = 'Marca al menos a una persona para repartir el gasto.'; er.hidden = false; return; }
       btn.disabled = true;
-      try{ await S.api.buyItemWithExpense(idc, amount); S.compraPrecio = null; toast(`Comprado y gasto anotado: ${eur(amount)} entre ${S.members.filter(m => m.id === S.api.uid || !fueraHoy(m.id)).length}. Lo verás en Gastos.`); await renderCompra(); }
+      try{ await S.api.buyItemConPartes(S.apt.id, it, amount, parts); S.compraPrecio = null; toast(`Comprado y gasto anotado: ${eur(amount)} entre ${parts.length === 1 ? '1 persona' : parts.length + ' personas'}. Lo verás en Gastos.`); await renderCompra(); }
       catch(err){ btn.disabled = false; toast(friendly(err)); }
     };
   }
@@ -2941,8 +3028,11 @@ async function renderCompra(){
       e.preventDefault();
       const amount = Math.round(parseFloat($('#precioIn').value) * 100) / 100;
       if (!(amount > 0)){ const er = $('#ePrecio'); er.textContent = 'Indica lo que costó (más de 0 €).'; er.hidden = false; $('#precioIn').focus(); return; }
+      const itp = items.find(x => x.id === fp.dataset.precio), parts = partesElegidas(fp);
+      if (!itp){ toast('Ese producto ya no está en la lista.'); await renderCompra(); return; }
+      if (!parts.length){ const er = $('#ePrecio'); er.textContent = 'Marca al menos a una persona para repartir el gasto.'; er.hidden = false; return; }
       const btn = fp.querySelector('button[type=submit]'); btn.disabled = true;
-      try{ await S.api.buyItemWithExpense(fp.dataset.precio, amount); S.precioItem = null; toast(`Gasto anotado: ${eur(amount)} entre ${S.members.length}. Lo verás en Gastos.`); await renderCompra(); }
+      try{ await S.api.buyItemConPartes(S.apt.id, itp, amount, parts); S.precioItem = null; toast(`Gasto anotado: ${eur(amount)} entre ${parts.length === 1 ? '1 persona' : parts.length + ' personas'}. Lo verás en Gastos.`); await renderCompra(); }
       catch(err){ btn.disabled = false; toast(friendly(err)); }
     };
   }
@@ -3067,8 +3157,10 @@ async function renderLimpieza(){
     <section class="sec" id="semana">
       <div class="sec-head"><h2>Esta semana</h2><span class="count">${done} de ${asg.length} hechas</span></div>
       ${propuestasHtml}
-      <p class="sub">Semana del ${esc(range)}. Cada lunes las zonas pasan al compañero anterior de la lista y nadie repite la zona de la semana pasada. El reparto se genera la primera vez que alguien abre la app esa semana.</p>
-      ${descansan.length ? `<p class="sub" style="margin-top:-4px">Sin zona esta semana: <b>${esc(descansan.join(', '))}</b>. El descanso también va rotando.</p>` : ''}
+      <p class="sub">Semana del ${esc(range)}. Cada lunes las zonas pasan al compañero anterior de la lista y nadie repite la zona de la semana pasada. Si hay tantas zonas como compañeros, le toca una a cada uno. El reparto se genera la primera vez que alguien abre la app esa semana.</p>
+      ${descansan.length ? `<p class="sub" style="margin-top:-4px">Sin zona esta semana: <b>${esc(descansan.join(', '))}</b>. Solo descansa alguien cuando hay más compañeros que zonas: el descanso va rotando.</p>` : ''}
+      ${asg.length && !asg.some(a => a.user_id === yoU) ? `<p class="sub" style="margin-top:-4px"><b>Esta semana no te toca ninguna zona</b>, así que no tienes nada que marcar como hecho.${
+        fueraSemana(yoU) ? ' Es porque estás fuera buena parte de la semana: si ya has vuelto, quita la ausencia en Piso → Compañeros → Ausencias y el reparto te tendrá en cuenta.' : ' Hay más compañeros que zonas y el descanso va rotando: la semana que viene te toca.'}</p>` : ''}
       ${asg.length ? `<div class="seg" aria-hidden="true">${asg.map(a => `<i class="${a.is_done?'on '+mc(a.user_id):''}"></i>`).join('')}</div>` : ''}
       <ul class="list">${asg.length ? asg.map(a => { const mine = a.user_id === S.api.uid; return `
         <li><button class="check" aria-pressed="${a.is_done}" data-a="${esc(a.id)}" ${mine?'':'disabled'} aria-label="${esc(a.zone)}: ${a.is_done?'hecha':'pendiente'}">${CHECK}</button>
@@ -3128,7 +3220,7 @@ const PASOS = [
   ['3','Repartid la limpieza','Definís las zonas una vez y la app reparte los turnos cada semana, rotando para que no le toque siempre lo mismo a la misma persona. Cada uno marca su tarea cuando la hace. Al abrir la app, una tarjeta te recuerda tu turno y el plazo, y en Limpieza tienes el histórico de quién ha cumplido.'],
   ['4','Llevad las cuentas','Si alguien adelanta algo (una cena, la compra), lo anota en Gastos: quién pagó, cuánto y quién participa, y se reparte a partes iguales. Para las facturas, dad de alta la luz, el agua o el internet con su importe y cada cuánto se repiten. La app os avisa de los vencimientos y, el día que vence, crea sola el gasto repartido entre los del piso. Cada uno marca cuando ha pagado su parte.'],
   ['5','Poned las normas del piso','En el Tablón, apartado Normas, apuntáis lo que acordáis entre todos: horarios de silencio, visitas, cocina… Cualquiera puede añadir, editar o eliminar una norma, y todo queda anotado en la actividad.'],
-  ['6','Usad el tablón de avisos','En el Tablón, apartado Avisos, publicáis lo que tienen que saber todos: visitas, cortes de agua, exámenes… Si le ponéis fecha de finalización, desaparece solo a esa hora. Solo quien lo publica puede borrarlo.'],
+  ['6','Usad el tablón de avisos','En el Tablón, apartado Avisos, publicáis lo que tienen que saber todos: visitas, cortes de agua, exámenes… Si le ponéis fecha de finalización, desaparece solo a esa hora. Cualquiera del piso puede editarlo (para cambiar una hora, por ejemplo) o eliminarlo cuando ya no haga falta.'],
   ['7','Compartid el enlace','La app se abre desde el navegador del móvil, sin instalar nada. Pásale el enlace a tus compañeros.']
 ];
 function renderAyuda(){
@@ -3297,6 +3389,12 @@ function formGastoHtml(){
         <small class="err" id="ePart" role="alert" hidden></small>
       </fieldset>
       <p class="small dim" id="gPreview" style="margin:0" aria-live="polite"></p>
+      ${ed ? '' : `<div>
+        <label class="foto-ticket" for="gFoto"><span id="gPrev" class="tk-prev">📷 Foto del ticket (opcional)</span></label>
+        <input id="gFoto" type="file" accept="image/*" capture="environment" class="sr-only">
+        <small class="err" id="eFoto" role="alert" hidden></small>
+        <small class="small dim">Si guardas la foto, el gasto queda con su ticket y podréis verlo desde Movimientos.</small>
+      </div>`}
       <div style="display:flex;gap:10px;flex-wrap:wrap">
         <button class="btn" type="submit">${ed ? 'Guardar cambios' : 'Guardar gasto'}</button>
         <button class="btn ghost" type="button" id="gCancel">Cancelar</button>
@@ -3669,6 +3767,16 @@ function bindFormGasto(){
   f.querySelectorAll('input[name=gCat]').forEach(r => r.addEventListener('change', () => { catTocada = true; }));
   $('#gConcepto').addEventListener('input', () => { if (catTocada) return; const k = sugerirCategoria($('#gConcepto').value); const r = f.querySelector(`input[name=gCat][value="${k}"]`); if (r) r.checked = true; });
   $('#gFecha').addEventListener('input', () => clearFieldError('gFecha'));
+  // Foto del ticket (TEO-20: se reduce antes de subirla, igual que en Compra)
+  let foto = null;
+  const inpFoto = $('#gFoto');
+  if (inpFoto) inpFoto.onchange = async e => {
+    const file = e.target.files && e.target.files[0], er = $('#eFoto'), prev = $('#gPrev'); er.hidden = true;
+    if (!file){ foto = null; return; }
+    prev.textContent = 'Preparando la foto…';
+    try{ foto = await comprimirFoto(file); prev.innerHTML = `<img src="${URL.createObjectURL(foto)}" alt="Foto del ticket">`; }
+    catch(err){ foto = null; prev.textContent = '📷 Foto del ticket (opcional)'; er.textContent = err.message; er.hidden = false; }
+  };
   f.querySelectorAll('#gPart input').forEach(i => i.addEventListener('input', () => { clearFieldError('gPart'); preview(); }));
   f.querySelectorAll('#gPart input[type=checkbox]').forEach(i => i.addEventListener('change', preview));
   $('#gCancel').onclick = async () => { S.gastoForm = false; S.gastoEdit = null; S.gastoTipo = null; await renderFacturas(); };
@@ -3689,13 +3797,22 @@ function bindFormGasto(){
     if (first){ (first.tagName === 'FIELDSET' ? first.querySelector('input') : first).focus(); return; }
     const btn = f.querySelector('button[type=submit]'); btn.disabled = true;
     const description = $('#gConcepto').value.trim() || 'Gasto sin concepto';
+    let receipt = null;
+    if (foto){
+      btn.textContent = 'Subiendo la foto…';
+      try{ receipt = await S.api.uploadReceipt(S.apt.id, foto); }
+      catch(err){ btn.disabled = false; btn.textContent = 'Guardar gasto'; toast(friendly(err)); return; }
+    }
     try{
-      const datos = {description, amount, paid_by:$('#gPayer').value, participants, split:t, values, date, category:(f.querySelector('input[name=gCat]:checked') || {}).value || 'otros'};
+      const datos = {description, amount, paid_by:$('#gPayer').value, participants, split:t, values, date, receipt, category:(f.querySelector('input[name=gCat]:checked') || {}).value || 'otros'};
       if (S.gastoEdit){ await S.api.updateExpense(S.gastoEdit.id, datos); toast(`Gasto actualizado: ${eur(amount)} entre ${participants.length}.`); }
-      else { await S.api.addExpense(S.apt.id, datos); toast(`Gasto anotado: ${eur(amount)} entre ${participants.length}.`); }
+      else { await S.api.addExpense(S.apt.id, datos); toast(`Gasto anotado: ${eur(amount)} entre ${participants.length}${receipt ? ', con su ticket' : ''}.`); }
       S.gastoForm = false; S.gastoEdit = null; S.gastoTipo = null; S.movFiltro = 'todos';
       await renderFacturas();
-    }catch(err){ btn.disabled = false; toast(friendly(err)); }   // el formulario conserva lo escrito
+    }catch(err){
+      if (receipt) S.api.delReceipt(receipt).catch(() => {});   // si el gasto no se crea, no se queda la foto suelta
+      btn.disabled = false; btn.textContent = S.gastoEdit ? 'Guardar cambios' : 'Guardar gasto'; toast(friendly(err));   // el formulario conserva lo escrito
+    }
   };
 }
 
