@@ -2454,7 +2454,7 @@ function ausenciasHtml(){
         <label style="flex:1 1 130px">Vuelvo el<input id="ausHasta" type="date" min="${hoy}"></label></div>
       <label>Motivo (opcional)<input id="ausNota" maxlength="60" placeholder="Vacaciones, Erasmus, casa de mis padres…"></label>
       <small class="err" id="eAus" role="alert" hidden></small>
-      <p class="small dim" style="margin:0">Mientras estés fuera no te tocarán turnos de limpieza (las semanas en las que faltes 4 días o más; si ya tenías uno esta semana, pasa a otro compañero) y no entrarás en el reparto de lo que se compre. Las facturas se siguen repartiendo igual.</p>
+      <p class="small dim" style="margin:0">Mientras estés fuera no te tocarán turnos de limpieza (las semanas en las que faltes 4 días o más; si ya tenías uno esta semana, pasa a otro compañero) y no entrarás en el reparto de las compras ni de los gastos que se anoten en ese tiempo. Las facturas se siguen repartiendo igual porque son del mes.</p>
       <div class="row"><button class="btn" type="submit">Guardar</button><button class="btn ghost" type="button" id="ausNo">Cancelar</button></div></form>`
       : `<button type="button" class="btn ghost" id="ausAbrir" style="width:100%">✈ Me voy unos días</button>`}</div>`;
 }
@@ -2678,7 +2678,7 @@ function partesCompraHtml(){
 const partesElegidas = f => [...f.querySelectorAll('input[name=cP]:checked')].map(x => x.value);
 // De la compra al gasto: quien lo compró puede anotar lo que costó y se reparte entre quien elija
 function precioCompra(i){
-  if (i.expense && !i.expense.deleted_at) return `<br><span class="small" style="font-weight:800">Gasto anotado: ${eur(i.expense.amount)}, repartido entre todos</span>`;
+  if (i.expense && !i.expense.deleted_at) return `<br><span class="small" style="font-weight:800">Gasto anotado: ${eur(i.expense.amount)} (el reparto está en Gastos)</span>`;
   if (i.bought_by !== S.api.uid) return '';
   if (S.precioItem === i.id) return `<form class="precio" data-precio="${esc(i.id)}" novalidate>
       <input id="precioIn" type="number" inputmode="decimal" min="0.01" step="0.01" placeholder="€" aria-label="Lo que costó ${esc(i.name)}">
@@ -3604,7 +3604,8 @@ async function renderFacturas(){
     S.api.billPayments(apt.id).catch(() => []),
     S.api.billExpenses(apt.id).catch(() => []),
     S.api.balances(apt.id).catch(() => null),
-    S.api.payments(apt.id).catch(() => [])
+    S.api.payments(apt.id).catch(() => []),
+    cargarAusencias()   // quién está fuera hoy: no se le marca en los gastos nuevos
   ]);
   if (S.apt !== apt || S.tab !== 'facturas') return;
   bills.sort((a,b) => (a.is_paused - b.is_paused) || a.next_due_date.localeCompare(b.next_due_date) || a.name.localeCompare(b.name,'es'));
